@@ -5,6 +5,20 @@ use std::iter::Peekable;
 use std::str::Chars;
 use thiserror::Error;
 
+/// Represents a region of the source code.
+#[derive(Clone, Debug, PartialEq, Copy)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// A token along with its position in the source code.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub span: Span,
+}
+
 /// A token represents a single meaningful unit in the source code.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
@@ -25,6 +39,7 @@ pub enum Token {
     Bang,
 
     Equal,
+    Lambda,
     EqualEqual,
     BangEqual,
     LessEqual,
@@ -32,21 +47,30 @@ pub enum Token {
     Less,
     Greater,
 
+    And,
+    Or,
+
     If,
+    Then,
     Else,
     Fn,
     Let,
+    In,
     Fix,
 }
 
 static KEYWORDS: phf::Map<&'static str, Token> = phf_map! {
     "if" => Token::If,
+    "then" => Token::Then,
     "else" => Token::Else,
     "fn" => Token::Fn,
     "let" => Token::Let,
     "fix" => Token::Fix,
     "true" => Token::Boolean(true),
     "false" => Token::Boolean(false),
+    "in" => Token::In,
+    "and" => Token::And,
+    "or" => Token::Or,
 };
 
 fn is_special_char(ch: char) -> bool {
@@ -237,11 +261,7 @@ impl<'a> Iterator for Lexer<'a> {
             ')' => Ok(Token::RightParen),
 
             '+' => Ok(Token::Plus),
-            '-' => match self.input.peek() {
-                Some('0'..='9') => self.parse_number(start, ch),
-                _ => Ok(Token::Minus),
-            },
-
+            '-' => Ok(Token::Minus),
             '*' => Ok(Token::Star),
 
             '/' if self.input.peek() == Some(&'/') => {
@@ -251,7 +271,10 @@ impl<'a> Iterator for Lexer<'a> {
             '/' => Ok(Token::Slash),
 
             '!' => Ok(self.next_or('=', Token::BangEqual, Token::Bang)),
-            '=' => Ok(self.next_or('=', Token::EqualEqual, Token::Equal)),
+            '=' => {
+                let first = self.next_or('>', Token::Lambda, Token::Equal);
+                Ok(self.next_or('=', Token::EqualEqual, first))
+            }
             '>' => Ok(self.next_or('=', Token::GreaterEqual, Token::Greater)),
             '<' => Ok(self.next_or('=', Token::LessEqual, Token::Less)),
 
@@ -339,7 +362,14 @@ mod tests {
         assert_eq!(errors.len(), 0);
         assert_eq!(
             tokens,
-            vec![Token::Integer(-1), Token::Integer(-42), Token::Integer(-999),]
+            vec![
+                Token::Minus,
+                Token::Integer(1),
+                Token::Minus,
+                Token::Integer(42),
+                Token::Minus,
+                Token::Integer(999),
+            ]
         );
     }
 
@@ -352,7 +382,11 @@ mod tests {
         assert_eq!(errors.len(), 0);
         assert_eq!(
             tokens,
-            vec![Token::Double(3.14), Token::Double(0.5), Token::Double(99.99),]
+            vec![
+                Token::Double(3.14),
+                Token::Double(0.5),
+                Token::Double(99.99),
+            ]
         );
     }
 
@@ -365,7 +399,12 @@ mod tests {
         assert_eq!(errors.len(), 0);
         assert_eq!(
             tokens,
-            vec![Token::Double(-3.14), Token::Double(-0.5),]
+            vec![
+                Token::Minus,
+                Token::Double(3.14),
+                Token::Minus,
+                Token::Double(0.5),
+            ]
         );
     }
 
@@ -403,10 +442,7 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(
-            tokens,
-            vec![Token::String(r#"hello\nworld"#.to_string()),]
-        );
+        assert_eq!(tokens, vec![Token::String(r#"hello\nworld"#.to_string()),]);
     }
 
     #[test]
@@ -422,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        let input = "if else fn let fix true false";
+        let input = "if else fn let fix true false and or";
         let mut lexer = Lexer::new(input);
         let (tokens, errors) = lexer.collect_all();
 
@@ -437,6 +473,8 @@ mod tests {
                 Token::Fix,
                 Token::Boolean(true),
                 Token::Boolean(false),
+                Token::And,
+                Token::Or,
             ]
         );
     }
@@ -584,7 +622,12 @@ mod tests {
         assert_eq!(errors.len(), 0);
         assert_eq!(
             tokens,
-            vec![Token::Integer(5), Token::Minus, Token::Integer(-3),]
+            vec![
+                Token::Integer(5),
+                Token::Minus,
+                Token::Minus,
+                Token::Integer(3),
+            ]
         );
     }
 
@@ -617,5 +660,49 @@ mod tests {
         assert_eq!(lexer.next(), Some(Ok(Token::Integer(2))));
         assert_eq!(lexer.next(), Some(Ok(Token::Integer(3))));
         assert_eq!(lexer.next(), None);
+    }
+
+    #[test]
+    fn test_lambda_operator() {
+        let input = "=> = == x => y";
+        let mut lexer = Lexer::new(input);
+        let (tokens, errors) = lexer.collect_all();
+
+        assert_eq!(errors.len(), 0);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Lambda,
+                Token::Equal,
+                Token::EqualEqual,
+                Token::Identifier("x".to_string()),
+                Token::Lambda,
+                Token::Identifier("y".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_logical_operators() {
+        let input = "(and true false) (or x y)";
+        let mut lexer = Lexer::new(input);
+        let (tokens, errors) = lexer.collect_all();
+
+        assert_eq!(errors.len(), 0);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LeftParen,
+                Token::And,
+                Token::Boolean(true),
+                Token::Boolean(false),
+                Token::RightParen,
+                Token::LeftParen,
+                Token::Or,
+                Token::Identifier("x".to_string()),
+                Token::Identifier("y".to_string()),
+                Token::RightParen,
+            ]
+        );
     }
 }
