@@ -1,5 +1,8 @@
+use crate::lexer::Token;
+use thiserror::Error;
+
 /// A program is a list of declarations with a name and an expression.
-/// In other words, each declaration is of the form `let name = value`.
+/// In other words, a program contains declarations of the form `let name = value`.
 pub struct Declaration {
     pub name: String,
     pub value: Expr,
@@ -33,4 +36,57 @@ pub enum Expr {
     BinOp(BinOp, Box<Expr>, Box<Expr>),
 }
 
-pub struct Parser {}
+pub struct Parser<'a> {
+    input: &'a [Token],
+    current: usize,
+    must_recover: bool,
+}
+
+/// Errors that can occur during parsing.
+#[derive(Error, Debug, PartialEq)]
+pub enum ParseError {
+    #[error("unexpected token")]
+    UnexpectedToken(usize),
+    #[error("unexpected eof")]
+    UnexpectedEOF,
+}
+
+impl<'a> Parser<'a> {
+    pub fn new(input: &'a [Token]) -> Self {
+        Self {
+            input,
+            current: 0,
+            must_recover: false,
+        }
+    }
+
+    fn recover(&mut self) {
+        if !self.must_recover {
+            return;
+        }
+        
+        self.current += 1;
+        while self.current < self.input.len() {
+            match self.input[self.current] {
+                Token::Let => break,
+                Token::Fn => break,
+                Token::If => break,
+                Token::Fix => break,
+                _ => {
+                    self.current += 1;
+                }
+            }
+        }
+
+        self.must_recover = false;
+    }
+}
+
+impl<'a> Iterator for Parser<'a> {
+    type Item = Result<Declaration, ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.recover();
+        None
+    }
+}

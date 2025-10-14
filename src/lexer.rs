@@ -105,7 +105,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Collects all tokens from the input, separating successful tokens from errors.
-    pub fn collect_all(&mut self) -> (Vec<Token>, Vec<LexError>) {
+    pub fn collect_all(&mut self) -> (Vec<SpannedToken>, Vec<LexError>) {
         let mut tokens = Vec::new();
         let mut errors = Vec::new();
 
@@ -246,7 +246,7 @@ impl<'a> Lexer<'a> {
     }
 }
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Token, LexError>;
+    type Item = Result<SpannedToken, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.skip_whitespace();
@@ -285,13 +285,22 @@ impl<'a> Iterator for Lexer<'a> {
             ch => Ok(self.parse_identifier(ch)),
         };
 
-        Some(result)
+        let end = self.position;
+        Some(result.map(|token| SpannedToken {
+            token,
+            span: Span { start, end },
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper function to extract just the tokens from a Vec<SpannedToken>
+    fn extract_tokens(spanned: Vec<SpannedToken>) -> Vec<Token> {
+        spanned.into_iter().map(|st| st.token).collect()
+    }
 
     #[test]
     fn test_single_char_tokens() {
@@ -301,7 +310,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::RightParen,
@@ -321,7 +330,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Less,
                 Token::Greater,
@@ -343,7 +352,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Integer(0),
                 Token::Integer(42),
@@ -361,7 +370,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Minus,
                 Token::Integer(1),
@@ -381,7 +390,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Double(3.14),
                 Token::Double(0.5),
@@ -398,7 +407,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Minus,
                 Token::Double(3.14),
@@ -416,7 +425,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::String("hello".to_string()),
                 Token::String("world".to_string()),
@@ -432,7 +441,10 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![Token::String(r#"hello "world""#.to_string()),]);
+        assert_eq!(
+            extract_tokens(tokens),
+            vec![Token::String(r#"hello "world""#.to_string()),]
+        );
     }
 
     #[test]
@@ -442,7 +454,10 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![Token::String(r#"hello\nworld"#.to_string()),]);
+        assert_eq!(
+            extract_tokens(tokens),
+            vec![Token::String(r#"hello\nworld"#.to_string()),]
+        );
     }
 
     #[test]
@@ -464,7 +479,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::If,
                 Token::Else,
@@ -487,7 +502,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Identifier("foo".to_string()),
                 Token::Identifier("bar".to_string()),
@@ -504,7 +519,10 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![Token::Integer(42), Token::Integer(99),]);
+        assert_eq!(
+            extract_tokens(tokens),
+            vec![Token::Integer(42), Token::Integer(99),]
+        );
     }
 
     #[test]
@@ -514,7 +532,10 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![Token::Integer(42), Token::Integer(99),]);
+        assert_eq!(
+            extract_tokens(tokens),
+            vec![Token::Integer(42), Token::Integer(99),]
+        );
     }
 
     #[test]
@@ -525,7 +546,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::Plus,
@@ -548,7 +569,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::Fn,
@@ -575,7 +596,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::Let,
@@ -594,7 +615,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::If,
@@ -621,7 +642,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Integer(5),
                 Token::Minus,
@@ -638,7 +659,7 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![]);
+        assert_eq!(extract_tokens(tokens), vec![]);
     }
 
     #[test]
@@ -648,7 +669,7 @@ mod tests {
         let (tokens, errors) = lexer.collect_all();
 
         assert_eq!(errors.len(), 0);
-        assert_eq!(tokens, vec![]);
+        assert_eq!(extract_tokens(tokens), vec![]);
     }
 
     #[test]
@@ -656,9 +677,27 @@ mod tests {
         let input = "1 2 3";
         let mut lexer = Lexer::new(input);
 
-        assert_eq!(lexer.next(), Some(Ok(Token::Integer(1))));
-        assert_eq!(lexer.next(), Some(Ok(Token::Integer(2))));
-        assert_eq!(lexer.next(), Some(Ok(Token::Integer(3))));
+        assert_eq!(
+            lexer.next(),
+            Some(Ok(SpannedToken {
+                token: Token::Integer(1),
+                span: Span { start: 0, end: 1 }
+            }))
+        );
+        assert_eq!(
+            lexer.next(),
+            Some(Ok(SpannedToken {
+                token: Token::Integer(2),
+                span: Span { start: 2, end: 3 }
+            }))
+        );
+        assert_eq!(
+            lexer.next(),
+            Some(Ok(SpannedToken {
+                token: Token::Integer(3),
+                span: Span { start: 4, end: 5 }
+            }))
+        );
         assert_eq!(lexer.next(), None);
     }
 
@@ -670,7 +709,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::Lambda,
                 Token::Equal,
@@ -690,7 +729,7 @@ mod tests {
 
         assert_eq!(errors.len(), 0);
         assert_eq!(
-            tokens,
+            extract_tokens(tokens),
             vec![
                 Token::LeftParen,
                 Token::And,
@@ -703,6 +742,117 @@ mod tests {
                 Token::Identifier("y".to_string()),
                 Token::RightParen,
             ]
+        );
+    }
+
+    #[test]
+    fn test_span_offsets() {
+        let input = "42 + hello";
+        let mut lexer = Lexer::new(input);
+        let (tokens, errors) = lexer.collect_all();
+
+        assert_eq!(errors.len(), 0);
+
+        assert_eq!(
+            tokens,
+            vec![
+                SpannedToken {
+                    token: Token::Integer(42),
+                    span: Span { start: 0, end: 2 }
+                },
+                SpannedToken {
+                    token: Token::Plus,
+                    span: Span { start: 3, end: 4 }
+                },
+                SpannedToken {
+                    token: Token::Identifier("hello".to_string()),
+                    span: Span { start: 5, end: 10 }
+                },
+            ]
+        );
+
+        // Verify we can extract substrings using the spans
+        assert_eq!(&input[tokens[0].span.start..tokens[0].span.end], "42");
+        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "+");
+        assert_eq!(&input[tokens[2].span.start..tokens[2].span.end], "hello");
+    }
+
+    #[test]
+    fn test_span_offsets_multichar_operators() {
+        let input = "x == y <= z";
+        let mut lexer = Lexer::new(input);
+        let (tokens, errors) = lexer.collect_all();
+
+        assert_eq!(errors.len(), 0);
+
+        assert_eq!(
+            tokens,
+            vec![
+                SpannedToken {
+                    token: Token::Identifier("x".to_string()),
+                    span: Span { start: 0, end: 1 }
+                },
+                SpannedToken {
+                    token: Token::EqualEqual,
+                    span: Span { start: 2, end: 4 }
+                },
+                SpannedToken {
+                    token: Token::Identifier("y".to_string()),
+                    span: Span { start: 5, end: 6 }
+                },
+                SpannedToken {
+                    token: Token::LessEqual,
+                    span: Span { start: 7, end: 9 }
+                },
+                SpannedToken {
+                    token: Token::Identifier("z".to_string()),
+                    span: Span { start: 10, end: 11 }
+                },
+            ]
+        );
+
+        assert_eq!(&input[tokens[0].span.start..tokens[0].span.end], "x");
+        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "==");
+        assert_eq!(&input[tokens[2].span.start..tokens[2].span.end], "y");
+        assert_eq!(&input[tokens[3].span.start..tokens[3].span.end], "<=");
+        assert_eq!(&input[tokens[4].span.start..tokens[4].span.end], "z");
+    }
+
+    #[test]
+    fn test_span_offsets_strings() {
+        let input = r#""hello" + "world""#;
+        let mut lexer = Lexer::new(input);
+        let (tokens, errors) = lexer.collect_all();
+
+        assert_eq!(errors.len(), 0);
+
+        assert_eq!(
+            tokens,
+            vec![
+                SpannedToken {
+                    token: Token::String("hello".to_string()),
+                    span: Span { start: 0, end: 7 }
+                },
+                SpannedToken {
+                    token: Token::Plus,
+                    span: Span { start: 8, end: 9 }
+                },
+                SpannedToken {
+                    token: Token::String("world".to_string()),
+                    span: Span { start: 10, end: 17 }
+                },
+            ]
+        );
+
+        // Verify we can extract substrings using the spans (includes quotes)
+        assert_eq!(
+            &input[tokens[0].span.start..tokens[0].span.end],
+            r#""hello""#
+        );
+        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "+");
+        assert_eq!(
+            &input[tokens[2].span.start..tokens[2].span.end],
+            r#""world""#
         );
     }
 }
