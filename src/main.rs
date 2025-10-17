@@ -1,9 +1,6 @@
-use tygr::lexer::format::report_errors;
-use tygr::lexer::LexError;
+use tygr::compiler::compile;
 
-fn main() {
-    let input = "let x = \"unterminated string";
-    let errors = vec![LexError::UnterminatedString(8)];
-
-    let _ = report_errors(input, &errors, "input.txt");
+fn main() -> Result<(), anyhow::Error>{
+    let input2 = "let x = fn x => x + 5";
+    compile(input2, "input2.txt")
 }

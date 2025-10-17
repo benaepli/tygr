@@ -1,6 +1,7 @@
 pub mod format;
 
 use phf_macros::phf_map;
+use std::fmt;
 use std::iter::Peekable;
 use std::str::Chars;
 use thiserror::Error;
@@ -59,6 +60,45 @@ pub enum Token {
     Fix,
 }
 
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::LeftParen => write!(f, "("),
+            Token::RightParen => write!(f, ")"),
+            Token::Plus => write!(f, "+"),
+            Token::Minus => write!(f, "-"),
+            Token::Star => write!(f, "*"),
+            Token::Slash => write!(f, "/"),
+            Token::Bang => write!(f, "!"),
+            Token::Equal => write!(f, "="),
+            Token::Lambda => write!(f, "\\"),
+            Token::Less => write!(f, "<"),
+            Token::Greater => write!(f, ">"),
+
+            Token::EqualEqual => write!(f, "=="),
+            Token::BangEqual => write!(f, "!="),
+            Token::LessEqual => write!(f, "<="),
+            Token::GreaterEqual => write!(f, ">="),
+
+            Token::Identifier(s) => write!(f, "{}", s),
+            Token::String(s) => write!(f, "\"{}\"", s),
+            Token::Double(d) => write!(f, "{}", d),
+            Token::Integer(i) => write!(f, "{}", i),
+            Token::Boolean(b) => write!(f, "{}", b),
+
+            Token::And => write!(f, "and"),
+            Token::Or => write!(f, "or"),
+            Token::If => write!(f, "if"),
+            Token::Then => write!(f, "then"),
+            Token::Else => write!(f, "else"),
+            Token::Fn => write!(f, "fn"),
+            Token::Let => write!(f, "let"),
+            Token::In => write!(f, "in"),
+            Token::Fix => write!(f, "fix"),
+        }
+    }
+}
+
 static KEYWORDS: phf::Map<&'static str, Token> = phf_map! {
     "if" => Token::If,
     "then" => Token::Then,
@@ -81,7 +121,7 @@ fn is_special_char(ch: char) -> bool {
 }
 
 /// Errors that can occur during lexical analysis.
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, PartialEq, Clone)]
 pub enum LexError {
     #[error("unexpected character")]
     UnexpectedChar(usize),
