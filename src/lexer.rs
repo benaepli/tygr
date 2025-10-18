@@ -31,6 +31,11 @@ pub enum Token {
     Star,
     Slash,
 
+    PlusDot,
+    MinusDot,
+    StarDot,
+    SlashDot,
+
     Identifier(String),
     String(String),
     Double(f64),
@@ -69,6 +74,10 @@ impl fmt::Display for Token {
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
+            Token::PlusDot => write!(f, "+."),
+            Token::MinusDot => write!(f, "-."),
+            Token::StarDot => write!(f, "*."),
+            Token::SlashDot => write!(f, "/."),
             Token::Bang => write!(f, "!"),
             Token::Equal => write!(f, "="),
             Token::Lambda => write!(f, "\\"),
@@ -300,15 +309,15 @@ impl<'a> Iterator for Lexer<'a> {
             '(' => Ok(Token::LeftParen),
             ')' => Ok(Token::RightParen),
 
-            '+' => Ok(Token::Plus),
-            '-' => Ok(Token::Minus),
-            '*' => Ok(Token::Star),
+            '+' => Ok(self.next_or('.', Token::PlusDot, Token::Plus)),
+            '-' => Ok(self.next_or('.', Token::MinusDot, Token::Minus)),
+            '*' => Ok(self.next_or('.', Token::StarDot, Token::Star)),
 
             '/' if self.input.peek() == Some(&'/') => {
                 self.skip_line_comment();
                 return self.next();
             }
-            '/' => Ok(Token::Slash),
+            '/' => Ok(self.next_or('.', Token::SlashDot, Token::Slash)),
 
             '!' => Ok(self.next_or('=', Token::BangEqual, Token::Bang)),
             '=' => {

@@ -1,4 +1,5 @@
 use crate::analysis::resolver::{Name, Resolved};
+use crate::builtin::BuiltinFn;
 use crate::parser::{BinOp, UnaryOp};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -41,7 +42,7 @@ pub enum TypedKind {
         body: Box<Typed>,
     },
     Fix(Box<Typed>),
-    If(Box<Typed>, Box<Typed>, Option<Box<Typed>>),
+    If(Box<Typed>, Box<Typed>, Box<Typed>),
 
     IntLit(i64),
     DoubleLit(f64),
@@ -49,6 +50,8 @@ pub enum TypedKind {
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
     UnaryOp(UnaryOp, Box<Typed>),
+
+    Builtin(BuiltinFn),
 }
 
 type Environment = HashMap<Name, TypeScheme>;
@@ -58,10 +61,21 @@ pub struct Inferrer {
     next_var: TypeID,
 }
 
+#[derive(Debug)]
+pub enum TypeError {
+    Mismatch(Rc<Type>, Rc<Type>),
+    OccursCheck(TypeID, Rc<Type>),
+    UnboundVariable(Name),
+}
+
 impl Inferrer {
     fn new_type(&mut self) -> Rc<Type> {
         let id = self.next_var.0;
         self.next_var.0 += 1;
         Rc::new(Type::Var(TypeID(id)))
+    }
+
+    fn infer(&mut self, env: &Environment, expr: Resolved) -> Result<Typed, TypeError> {
+        todo!()
     }
 }

@@ -17,6 +17,10 @@ pub enum BinOp {
     Subtract,
     Multiply,
     Divide,
+    AddFloat,
+    SubtractFloat,
+    MultiplyFloat,
+    DivideFloat,
     Equal,
     NotEqual,
     LessEqual,
@@ -30,6 +34,7 @@ pub enum BinOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Negate,
+    NegateFloat,
     Not,
 }
 
@@ -40,7 +45,7 @@ pub enum Expr {
     App(Box<Expr>, Box<Expr>),
     Let(String, Box<Expr>, Box<Expr>),
     Fix(Box<Expr>),
-    If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
 
     IntLit(i64),
     DoubleLit(f64),
@@ -72,6 +77,9 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
                 just(Token::Minus)
                     .ignore_then(unary.clone())
                     .map(|e| Expr::UnaryOp(UnaryOp::Negate, Box::new(e))),
+                just(Token::MinusDot)
+                    .ignore_then(unary.clone())
+                    .map(|e| Expr::UnaryOp(UnaryOp::NegateFloat, Box::new(e))),
                 just(Token::Bang)
                     .ignore_then(unary.clone())
                     .map(|e| Expr::UnaryOp(UnaryOp::Not, Box::new(e))),
@@ -96,6 +104,8 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
             choice((
                 just(Token::Star).to(BinOp::Multiply),
                 just(Token::Slash).to(BinOp::Divide),
+                just(Token::StarDot).to(BinOp::MultiplyFloat),
+                just(Token::SlashDot).to(BinOp::DivideFloat),
             ))
             .then(apply)
             .repeated(),
@@ -106,6 +116,8 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
             choice((
                 just(Token::Plus).to(BinOp::Add),
                 just(Token::Minus).to(BinOp::Subtract),
+                just(Token::PlusDot).to(BinOp::AddFloat),
+                just(Token::MinusDot).to(BinOp::SubtractFloat),
             ))
             .then(factor)
             .repeated(),
@@ -152,8 +164,9 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
             .ignore_then(expr.clone())
             .then_ignore(just(Token::Then))
             .then(expr.clone())
-            .then(just(Token::Else).ignore_then(expr.clone()).or_not())
-            .map(|((cnd, csq), alt)| Expr::If(Box::new(cnd), Box::new(csq), alt.map(Box::new)));
+            .then_ignore(just(Token::Else))
+            .then(expr.clone())
+            .map(|((cnd, csq), alt)| Expr::If(Box::new(cnd), Box::new(csq), Box::new(alt)));
 
         let lambda_expr = just(Token::Fn)
             .ignore_then(select! { Token::Identifier(s) => s.clone() })

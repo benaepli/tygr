@@ -1,6 +1,7 @@
+use crate::builtin::{BUILTINS, BuiltinFn};
+use crate::parser::{BinOp, Expr, UnaryOp};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
-use crate::parser::{BinOp, Expr, UnaryOp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(pub usize);
@@ -20,7 +21,7 @@ pub enum Resolved {
         body: Box<Resolved>,
     },
     Fix(Box<Resolved>),
-    If(Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
+    If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
     IntLit(i64),
     DoubleLit(f64),
@@ -28,6 +29,8 @@ pub enum Resolved {
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
     UnaryOp(UnaryOp, Box<Resolved>),
+
+    Builtin(BuiltinFn),
 }
 
 #[derive(Error, Debug, PartialEq, Clone)]
@@ -41,14 +44,26 @@ type Scope = HashMap<String, Name>;
 pub struct Resolver {
     scopes: Vec<Scope>,
     next_id: Name,
+    builtins: HashMap<Name, BuiltinFn>,
 }
 
 impl Resolver {
     pub fn new() -> Self {
-        Self {
+        let mut resolver = Self {
             scopes: vec![],
             next_id: Name(0),
+            builtins: HashMap::new(),
+        };
+
+        let mut global = Scope::new();
+        for (keyword, builtin) in BUILTINS.entries() {
+            let name_id = resolver.new_name();
+            global.insert(keyword.to_string(), name_id);
+            resolver.builtins.insert(name_id, builtin.clone());
         }
+        resolver.scopes.push(global);
+
+        resolver
     }
 
     fn new_name(&mut self) -> Name {
@@ -67,9 +82,13 @@ impl Resolver {
             Expr::Var(name) => {
                 for scope in self.scopes.iter().rev() {
                     if let Some(id) = scope.get(&name) {
-                        let mut free = HashSet::new();
-                        free.insert(*id);
-                        return Ok((Resolved::Var(*id), free));
+                        if let Some(builtin) = self.builtins.get(id) {
+                            return Ok((Resolved::Builtin(builtin.clone()), HashSet::new()));
+                        } else {
+                            let mut free = HashSet::new();
+                            free.insert(*id);
+                            return Ok((Resolved::Var(*id), free));
+                        }
                     }
                 }
                 Err(ResolutionError::VariableNotFound(name))
@@ -108,27 +127,21 @@ impl Resolver {
             Expr::If(condition, consequent, alternative) => {
                 let (resolved_condition, free_condition) = self.analyze(*condition)?;
                 let (resolved_consequent, free_consequent) = self.analyze(*consequent)?;
+                let (resolved_alternative, free_alternative) = self.analyze(*alternative)?;
 
-                let (resolved_alternative, all_free) = if let Some(alt) = alternative {
-                    let (resolved_alt, free_alt) = self.analyze(*alt)?;
-                    let all = free_condition
-                        .union(&free_consequent)
-                        .cloned()
-                        .collect::<HashSet<_>>()
-                        .union(&free_alt)
-                        .cloned()
-                        .collect();
-                    (Some(Box::new(resolved_alt)), all)
-                } else {
-                    let all = free_condition.union(&free_consequent).cloned().collect();
-                    (None, all)
-                };
+                let all_free = free_condition
+                    .union(&free_consequent)
+                    .cloned()
+                    .collect::<HashSet<_>>()
+                    .union(&free_alternative)
+                    .cloned()
+                    .collect();
 
                 Ok((
                     Resolved::If(
                         Box::new(resolved_condition),
                         Box::new(resolved_consequent),
-                        resolved_alternative,
+                        Box::new(resolved_alternative),
                     ),
                     all_free,
                 ))
