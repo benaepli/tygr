@@ -1,5 +1,5 @@
 use crate::builtin::{BUILTINS, BuiltinFn};
-use crate::parser::{BinOp, Expr};
+use crate::parser::{BinOp, Expr, ExprKind, Span};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -7,7 +7,19 @@ use thiserror::Error;
 pub struct Name(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Resolved {
+pub struct Resolved {
+    pub kind: ResolvedKind,
+    pub span: Span,
+}
+
+impl Resolved {
+    fn new(kind: ResolvedKind, span: Span) -> Self {
+        Resolved { kind, span }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedKind {
     Var(Name),
     Lambda {
         param: Name,
@@ -36,7 +48,7 @@ pub enum Resolved {
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum ResolutionError {
     #[error("variable `{0}` not found")]
-    VariableNotFound(String),
+    VariableNotFound(String, Span),
 }
 
 type Scope = HashMap<String, Name>;
@@ -78,50 +90,74 @@ impl Resolver {
     }
 
     fn analyze(&mut self, expr: Expr) -> Result<(Resolved, HashSet<Name>), ResolutionError> {
-        match expr {
-            Expr::Var(name) => {
+        let span = expr.span;
+        match expr.kind {
+            ExprKind::Var(name) => {
                 for scope in self.scopes.iter().rev() {
                     if let Some(id) = scope.get(&name) {
                         if let Some(builtin) = self.builtins.get(id) {
-                            return Ok((Resolved::Builtin(builtin.clone()), HashSet::new()));
+                            return Ok((
+                                Resolved::new(ResolvedKind::Builtin(builtin.clone()), span),
+                                HashSet::new(),
+                            ));
                         } else {
                             let mut free = HashSet::new();
                             free.insert(*id);
-                            return Ok((Resolved::Var(*id), free));
+                            return Ok((Resolved::new(ResolvedKind::Var(*id), span), free));
                         }
                     }
                 }
-                Err(ResolutionError::VariableNotFound(name))
+                Err(ResolutionError::VariableNotFound(name, span))
             }
 
-            Expr::IntLit(i) => Ok((Resolved::IntLit(i), HashSet::new())),
-            Expr::FloatLit(d) => Ok((Resolved::FloatLit(d), HashSet::new())),
-            Expr::BoolLit(b) => Ok((Resolved::BoolLit(b), HashSet::new())),
-            Expr::StringLit(s) => Ok((Resolved::StringLit(s), HashSet::new())),
+            ExprKind::IntLit(i) => {
+                Ok((Resolved::new(ResolvedKind::IntLit(i), span), HashSet::new()))
+            }
+            ExprKind::FloatLit(d) => Ok((
+                Resolved::new(ResolvedKind::FloatLit(d), span),
+                HashSet::new(),
+            )),
+            ExprKind::BoolLit(b) => Ok((
+                Resolved::new(ResolvedKind::BoolLit(b), span),
+                HashSet::new(),
+            )),
+            ExprKind::StringLit(s) => Ok((
+                Resolved::new(ResolvedKind::StringLit(s), span),
+                HashSet::new(),
+            )),
 
-            Expr::BinOp(op, a, b) => {
+            ExprKind::BinOp(op, a, b) => {
                 let (resolved_a, free_a) = self.analyze(*a)?;
                 let (resolved_b, free_b) = self.analyze(*b)?;
                 let all = free_a.union(&free_b).cloned().collect();
                 Ok((
-                    Resolved::BinOp(op, Box::new(resolved_a), Box::new(resolved_b)),
+                    Resolved::new(
+                        ResolvedKind::BinOp(op, Box::new(resolved_a), Box::new(resolved_b)),
+                        span,
+                    ),
                     all,
                 ))
             }
-            Expr::App(func, arg) => {
+            ExprKind::App(func, arg) => {
                 let (resolved_func, free_func) = self.analyze(*func)?;
                 let (resolved_arg, free_arg) = self.analyze(*arg)?;
                 let all = free_func.union(&free_arg).cloned().collect();
                 Ok((
-                    Resolved::App(Box::new(resolved_func), Box::new(resolved_arg)),
+                    Resolved::new(
+                        ResolvedKind::App(Box::new(resolved_func), Box::new(resolved_arg)),
+                        span,
+                    ),
                     all,
                 ))
             }
-            Expr::Fix(e) => {
+            ExprKind::Fix(e) => {
                 let (resolved, free) = self.analyze(*e)?;
-                Ok((Resolved::Fix(Box::new(resolved)), free))
+                Ok((
+                    Resolved::new(ResolvedKind::Fix(Box::new(resolved)), span),
+                    free,
+                ))
             }
-            Expr::If(condition, consequent, alternative) => {
+            ExprKind::If(condition, consequent, alternative) => {
                 let (resolved_condition, free_condition) = self.analyze(*condition)?;
                 let (resolved_consequent, free_consequent) = self.analyze(*consequent)?;
                 let (resolved_alternative, free_alternative) = self.analyze(*alternative)?;
@@ -135,16 +171,19 @@ impl Resolver {
                     .collect();
 
                 Ok((
-                    Resolved::If(
-                        Box::new(resolved_condition),
-                        Box::new(resolved_consequent),
-                        Box::new(resolved_alternative),
+                    Resolved::new(
+                        ResolvedKind::If(
+                            Box::new(resolved_condition),
+                            Box::new(resolved_consequent),
+                            Box::new(resolved_alternative),
+                        ),
+                        span,
                     ),
                     all_free,
                 ))
             }
 
-            Expr::Let(name, value, body) => {
+            ExprKind::Let(name, value, body) => {
                 let (resolved_value, free_in_value) = self.analyze(*value)?;
                 let new_id = self.new_name();
 
@@ -158,15 +197,18 @@ impl Resolver {
                 free_in_body.remove(&new_id);
                 let all_free = free_in_value.union(&free_in_body).cloned().collect();
                 Ok((
-                    Resolved::Let {
-                        name: new_id,
-                        value: Box::new(resolved_value),
-                        body: Box::new(resolved_body),
-                    },
+                    Resolved::new(
+                        ResolvedKind::Let {
+                            name: new_id,
+                            value: Box::new(resolved_value),
+                            body: Box::new(resolved_body),
+                        },
+                        span,
+                    ),
                     all_free,
                 ))
             }
-            Expr::Lambda(param, body) => {
+            ExprKind::Lambda(param, body) => {
                 let param_id = self.new_name();
 
                 let mut new_scope = HashMap::new();
@@ -179,11 +221,14 @@ impl Resolver {
                 free_in_body.remove(&param_id);
 
                 Ok((
-                    Resolved::Lambda {
-                        param: param_id,
-                        body: Box::new(resolved_body),
-                        captures: free_in_body.clone(),
-                    },
+                    Resolved::new(
+                        ResolvedKind::Lambda {
+                            param: param_id,
+                            body: Box::new(resolved_body),
+                            captures: free_in_body.clone(),
+                        },
+                        span,
+                    ),
                     free_in_body,
                 ))
             }

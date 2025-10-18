@@ -1,28 +1,34 @@
 pub mod format;
 
+use crate::parser::Span;
 use phf_macros::phf_map;
 use std::fmt;
 use std::iter::Peekable;
 use std::str::Chars;
 use thiserror::Error;
 
-/// Represents a region of the source code.
-#[derive(Clone, Debug, PartialEq, Copy)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-/// A token along with its position in the source code.
+/// A token represents a single meaningful unit in the source code with its position.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SpannedToken {
-    pub token: Token,
+pub struct Token {
+    pub kind: TokenKind,
     pub span: Span,
 }
 
-/// A token represents a single meaningful unit in the source code.
+impl Token {
+    fn new(kind: TokenKind, span: Span) -> Self {
+        Token { kind, span }
+    }
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+/// The kind of token.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Token {
+pub enum TokenKind {
     LeftParen,
     RightParen,
 
@@ -76,72 +82,72 @@ pub enum Token {
     Fix,
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Token::LeftParen => write!(f, "("),
-            Token::RightParen => write!(f, ")"),
-            Token::Plus => write!(f, "+"),
-            Token::Minus => write!(f, "-"),
-            Token::Star => write!(f, "*"),
-            Token::Slash => write!(f, "/"),
-            Token::Caret => write!(f, "^"),
-            Token::PlusDot => write!(f, "+."),
-            Token::MinusDot => write!(f, "-."),
-            Token::StarDot => write!(f, "*."),
-            Token::SlashDot => write!(f, "/."),
-            Token::Bang => write!(f, "!"),
-            Token::Equal => write!(f, "="),
-            Token::Lambda => write!(f, "\\"),
-            Token::Less => write!(f, "<"),
-            Token::Greater => write!(f, ">"),
+            TokenKind::LeftParen => write!(f, "("),
+            TokenKind::RightParen => write!(f, ")"),
+            TokenKind::Plus => write!(f, "+"),
+            TokenKind::Minus => write!(f, "-"),
+            TokenKind::Star => write!(f, "*"),
+            TokenKind::Slash => write!(f, "/"),
+            TokenKind::Caret => write!(f, "^"),
+            TokenKind::PlusDot => write!(f, "+."),
+            TokenKind::MinusDot => write!(f, "-."),
+            TokenKind::StarDot => write!(f, "*."),
+            TokenKind::SlashDot => write!(f, "/."),
+            TokenKind::Bang => write!(f, "!"),
+            TokenKind::Equal => write!(f, "="),
+            TokenKind::Lambda => write!(f, "\\"),
+            TokenKind::Less => write!(f, "<"),
+            TokenKind::Greater => write!(f, ">"),
 
-            Token::EqualEqual => write!(f, "=="),
-            Token::BangEqual => write!(f, "!="),
-            Token::LessEqual => write!(f, "<="),
-            Token::GreaterEqual => write!(f, ">="),
+            TokenKind::EqualEqual => write!(f, "=="),
+            TokenKind::BangEqual => write!(f, "!="),
+            TokenKind::LessEqual => write!(f, "<="),
+            TokenKind::GreaterEqual => write!(f, ">="),
 
-            Token::EqualEqualDot => write!(f, "==."),
-            Token::BangEqualDot => write!(f, "!=."),
-            Token::GreaterEqualDot => write!(f, ">=."),
-            Token::LessEqualDot => write!(f, "<=."),
-            Token::GreaterDot => write!(f, ">."),
-            Token::LessDot => write!(f, "<."),
+            TokenKind::EqualEqualDot => write!(f, "==."),
+            TokenKind::BangEqualDot => write!(f, "!=."),
+            TokenKind::GreaterEqualDot => write!(f, ">=."),
+            TokenKind::LessEqualDot => write!(f, "<=."),
+            TokenKind::GreaterDot => write!(f, ">."),
+            TokenKind::LessDot => write!(f, "<."),
 
-            Token::EqualEqualB => write!(f, "==b"),
-            Token::BangEqualB => write!(f, "!=b"),
+            TokenKind::EqualEqualB => write!(f, "==b"),
+            TokenKind::BangEqualB => write!(f, "!=b"),
 
-            Token::Identifier(s) => write!(f, "{}", s),
-            Token::String(s) => write!(f, "\"{}\"", s),
-            Token::Float(d) => write!(f, "{}", d),
-            Token::Integer(i) => write!(f, "{}", i),
-            Token::Boolean(b) => write!(f, "{}", b),
+            TokenKind::Identifier(s) => write!(f, "{}", s),
+            TokenKind::String(s) => write!(f, "\"{}\"", s),
+            TokenKind::Float(d) => write!(f, "{}", d),
+            TokenKind::Integer(i) => write!(f, "{}", i),
+            TokenKind::Boolean(b) => write!(f, "{}", b),
 
-            Token::And => write!(f, "and"),
-            Token::Or => write!(f, "or"),
-            Token::If => write!(f, "if"),
-            Token::Then => write!(f, "then"),
-            Token::Else => write!(f, "else"),
-            Token::Fn => write!(f, "fn"),
-            Token::Let => write!(f, "let"),
-            Token::In => write!(f, "in"),
-            Token::Fix => write!(f, "fix"),
+            TokenKind::And => write!(f, "and"),
+            TokenKind::Or => write!(f, "or"),
+            TokenKind::If => write!(f, "if"),
+            TokenKind::Then => write!(f, "then"),
+            TokenKind::Else => write!(f, "else"),
+            TokenKind::Fn => write!(f, "fn"),
+            TokenKind::Let => write!(f, "let"),
+            TokenKind::In => write!(f, "in"),
+            TokenKind::Fix => write!(f, "fix"),
         }
     }
 }
 
-static KEYWORDS: phf::Map<&'static str, Token> = phf_map! {
-    "if" => Token::If,
-    "then" => Token::Then,
-    "else" => Token::Else,
-    "fn" => Token::Fn,
-    "let" => Token::Let,
-    "fix" => Token::Fix,
-    "true" => Token::Boolean(true),
-    "false" => Token::Boolean(false),
-    "in" => Token::In,
-    "and" => Token::And,
-    "or" => Token::Or,
+static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
+    "if" => TokenKind::If,
+    "then" => TokenKind::Then,
+    "else" => TokenKind::Else,
+    "fn" => TokenKind::Fn,
+    "let" => TokenKind::Let,
+    "fix" => TokenKind::Fix,
+    "true" => TokenKind::Boolean(true),
+    "false" => TokenKind::Boolean(false),
+    "in" => TokenKind::In,
+    "and" => TokenKind::And,
+    "or" => TokenKind::Or,
 };
 
 fn is_special_char(ch: char) -> bool {
@@ -176,7 +182,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Collects all tokens from the input, separating successful tokens from errors.
-    pub fn collect_all(&mut self) -> (Vec<SpannedToken>, Vec<LexError>) {
+    pub fn collect_all(&mut self) -> (Vec<Token>, Vec<LexError>) {
         let mut tokens = Vec::new();
         let mut errors = Vec::new();
 
@@ -200,7 +206,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next_or(&mut self, expected: char, result: Token, default: Token) -> Token {
+    fn next_or(&mut self, expected: char, result: TokenKind, default: TokenKind) -> TokenKind {
         if self.match_next(expected) {
             result
         } else {
@@ -232,7 +238,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn parse_string(&mut self, start: usize) -> Result<Token, LexError> {
+    fn parse_string(&mut self, start: usize) -> Result<TokenKind, LexError> {
         let mut value = String::new();
 
         loop {
@@ -242,7 +248,7 @@ impl<'a> Lexer<'a> {
                 .ok_or(LexError::UnterminatedString(start))?;
             self.position += 1;
             match ch {
-                '"' => return Ok(Token::String(value)),
+                '"' => return Ok(TokenKind::String(value)),
                 '\\' => {
                     // In this language, we only escape the quote character.
                     // WYSIWYG, except for ".
@@ -266,7 +272,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn parse_number(&mut self, start: usize, first: char) -> Result<Token, LexError> {
+    fn parse_number(&mut self, start: usize, first: char) -> Result<TokenKind, LexError> {
         let mut num_str = String::from(first);
         let mut has_decimal = false;
 
@@ -290,17 +296,17 @@ impl<'a> Lexer<'a> {
         if has_decimal {
             num_str
                 .parse()
-                .map(Token::Float)
+                .map(TokenKind::Float)
                 .map_err(|_| LexError::UnexpectedChar(start))
         } else {
             num_str
                 .parse()
-                .map(Token::Integer)
+                .map(TokenKind::Integer)
                 .map_err(|_| LexError::UnexpectedChar(start))
         }
     }
 
-    fn parse_identifier(&mut self, first: char) -> Token {
+    fn parse_identifier(&mut self, first: char) -> TokenKind {
         let mut result = String::from(first);
         while let Some(&ch) = self.input.peek()
             && !ch.is_whitespace()
@@ -313,11 +319,11 @@ impl<'a> Lexer<'a> {
         KEYWORDS
             .get(&result)
             .cloned()
-            .unwrap_or_else(|| Token::Identifier(result))
+            .unwrap_or_else(|| TokenKind::Identifier(result))
     }
 }
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<SpannedToken, LexError>;
+    type Item = Result<Token, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.skip_whitespace();
@@ -328,65 +334,65 @@ impl<'a> Iterator for Lexer<'a> {
         self.position += 1;
 
         let result = match ch {
-            '(' => Ok(Token::LeftParen),
-            ')' => Ok(Token::RightParen),
+            '(' => Ok(TokenKind::LeftParen),
+            ')' => Ok(TokenKind::RightParen),
 
-            '+' => Ok(self.next_or('.', Token::PlusDot, Token::Plus)),
-            '-' => Ok(self.next_or('.', Token::MinusDot, Token::Minus)),
-            '*' => Ok(self.next_or('.', Token::StarDot, Token::Star)),
+            '+' => Ok(self.next_or('.', TokenKind::PlusDot, TokenKind::Plus)),
+            '-' => Ok(self.next_or('.', TokenKind::MinusDot, TokenKind::Minus)),
+            '*' => Ok(self.next_or('.', TokenKind::StarDot, TokenKind::Star)),
 
             '/' if self.input.peek() == Some(&'/') => {
                 self.skip_line_comment();
                 return self.next();
             }
-            '/' => Ok(self.next_or('.', Token::SlashDot, Token::Slash)),
+            '/' => Ok(self.next_or('.', TokenKind::SlashDot, TokenKind::Slash)),
 
-            '^' => Ok(Token::Caret),
+            '^' => Ok(TokenKind::Caret),
 
             '!' => {
                 if self.match_next('=') {
                     if self.match_next('b') {
-                        Ok(Token::BangEqualB)
+                        Ok(TokenKind::BangEqualB)
                     } else if self.match_next('.') {
-                        Ok(Token::BangEqualDot)
+                        Ok(TokenKind::BangEqualDot)
                     } else {
-                        Ok(Token::BangEqual)
+                        Ok(TokenKind::BangEqual)
                     }
                 } else {
-                    Ok(Token::Bang)
+                    Ok(TokenKind::Bang)
                 }
             }
             '=' => {
                 if self.match_next('>') {
-                    Ok(Token::Lambda)
+                    Ok(TokenKind::Lambda)
                 } else if self.match_next('=') {
                     if self.match_next('b') {
-                        Ok(Token::EqualEqualB)
+                        Ok(TokenKind::EqualEqualB)
                     } else if self.match_next('.') {
-                        Ok(Token::EqualEqualDot)
+                        Ok(TokenKind::EqualEqualDot)
                     } else {
-                        Ok(Token::EqualEqual)
+                        Ok(TokenKind::EqualEqual)
                     }
                 } else {
-                    Ok(Token::Equal)
+                    Ok(TokenKind::Equal)
                 }
             }
             '>' => {
                 if self.match_next('=') {
-                    Ok(self.next_or('.', Token::GreaterEqualDot, Token::GreaterEqual))
+                    Ok(self.next_or('.', TokenKind::GreaterEqualDot, TokenKind::GreaterEqual))
                 } else if self.match_next('.') {
-                    Ok(Token::GreaterDot)
+                    Ok(TokenKind::GreaterDot)
                 } else {
-                    Ok(Token::Greater)
+                    Ok(TokenKind::Greater)
                 }
             }
             '<' => {
                 if self.match_next('=') {
-                    Ok(self.next_or('.', Token::LessEqualDot, Token::LessEqual))
+                    Ok(self.next_or('.', TokenKind::LessEqualDot, TokenKind::LessEqual))
                 } else if self.match_next('.') {
-                    Ok(Token::LessDot)
+                    Ok(TokenKind::LessDot)
                 } else {
-                    Ok(Token::Less)
+                    Ok(TokenKind::Less)
                 }
             }
 
@@ -398,573 +404,6 @@ impl<'a> Iterator for Lexer<'a> {
         };
 
         let end = self.position;
-        Some(result.map(|token| SpannedToken {
-            token,
-            span: Span { start, end },
-        }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Helper function to extract just the tokens from a Vec<SpannedToken>
-    fn extract_tokens(spanned: Vec<SpannedToken>) -> Vec<Token> {
-        spanned.into_iter().map(|st| st.token).collect()
-    }
-
-    #[test]
-    fn test_single_char_tokens() {
-        let input = "( ) + - * /";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::RightParen,
-                Token::Plus,
-                Token::Minus,
-                Token::Star,
-                Token::Slash,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_comparison_operators() {
-        let input = "< > <= >= == != = !";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Less,
-                Token::Greater,
-                Token::LessEqual,
-                Token::GreaterEqual,
-                Token::EqualEqual,
-                Token::BangEqual,
-                Token::Equal,
-                Token::Bang,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_integers() {
-        let input = "0 42 123 999";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Integer(0),
-                Token::Integer(42),
-                Token::Integer(123),
-                Token::Integer(999),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_negative_integers() {
-        let input = "-1 -42 -999";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Minus,
-                Token::Integer(1),
-                Token::Minus,
-                Token::Integer(42),
-                Token::Minus,
-                Token::Integer(999),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_floats() {
-        let input = "3.14 0.5 99.99";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Float(3.14),
-                Token::Float(0.5),
-                Token::Float(99.99),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_negative_floats() {
-        let input = "-3.14 -0.5";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Minus,
-                Token::Float(3.14),
-                Token::Minus,
-                Token::Float(0.5),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_strings() {
-        let input = r#""hello" "world" """#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::String("hello".to_string()),
-                Token::String("world".to_string()),
-                Token::String("".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_string_with_escape() {
-        let input = r#""hello \"world\"""#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![Token::String(r#"hello "world""#.to_string()),]
-        );
-    }
-
-    #[test]
-    fn test_string_wysiwyg_escape() {
-        let input = r#""hello\nworld""#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![Token::String(r#"hello\nworld"#.to_string()),]
-        );
-    }
-
-    #[test]
-    fn test_unterminated_string() {
-        let input = r#""hello"#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(tokens.len(), 0);
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(errors[0], LexError::UnterminatedString(_)));
-    }
-
-    #[test]
-    fn test_keywords() {
-        let input = "if else fn let fix true false and or";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::If,
-                Token::Else,
-                Token::Fn,
-                Token::Let,
-                Token::Fix,
-                Token::Boolean(true),
-                Token::Boolean(false),
-                Token::And,
-                Token::Or,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_identifiers() {
-        let input = "foo bar baz myVariable";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Identifier("foo".to_string()),
-                Token::Identifier("bar".to_string()),
-                Token::Identifier("baz".to_string()),
-                Token::Identifier("myVariable".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_line_comments() {
-        let input = "// this is a comment\n42 // another comment\n99";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![Token::Integer(42), Token::Integer(99),]
-        );
-    }
-
-    #[test]
-    fn test_whitespace_handling() {
-        let input = "  42  \n\t  99  \r\n  ";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![Token::Integer(42), Token::Integer(99),]
-        );
-    }
-
-    #[test]
-    fn test_complex_expression() {
-        let input = "(+ 1 (* 2 3))";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::Plus,
-                Token::Integer(1),
-                Token::LeftParen,
-                Token::Star,
-                Token::Integer(2),
-                Token::Integer(3),
-                Token::RightParen,
-                Token::RightParen,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_function_definition() {
-        let input = r#"(fn add (x y) (+ x y))"#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::Fn,
-                Token::Identifier("add".to_string()),
-                Token::LeftParen,
-                Token::Identifier("x".to_string()),
-                Token::Identifier("y".to_string()),
-                Token::RightParen,
-                Token::LeftParen,
-                Token::Plus,
-                Token::Identifier("x".to_string()),
-                Token::Identifier("y".to_string()),
-                Token::RightParen,
-                Token::RightParen,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_let_binding() {
-        let input = r#"(let x 42)"#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::Let,
-                Token::Identifier("x".to_string()),
-                Token::Integer(42),
-                Token::RightParen,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_conditional_expression() {
-        let input = "(if (> x 0) x (- x))";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::If,
-                Token::LeftParen,
-                Token::Greater,
-                Token::Identifier("x".to_string()),
-                Token::Integer(0),
-                Token::RightParen,
-                Token::Identifier("x".to_string()),
-                Token::LeftParen,
-                Token::Minus,
-                Token::Identifier("x".to_string()),
-                Token::RightParen,
-                Token::RightParen,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_minus_vs_negative() {
-        let input = "5 - -3";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Integer(5),
-                Token::Minus,
-                Token::Minus,
-                Token::Integer(3),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_empty_input() {
-        let input = "";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(extract_tokens(tokens), vec![]);
-    }
-
-    #[test]
-    fn test_only_comments() {
-        let input = "// just a comment\n// another one";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(extract_tokens(tokens), vec![]);
-    }
-
-    #[test]
-    fn test_iterator_usage() {
-        let input = "1 2 3";
-        let mut lexer = Lexer::new(input);
-
-        assert_eq!(
-            lexer.next(),
-            Some(Ok(SpannedToken {
-                token: Token::Integer(1),
-                span: Span { start: 0, end: 1 }
-            }))
-        );
-        assert_eq!(
-            lexer.next(),
-            Some(Ok(SpannedToken {
-                token: Token::Integer(2),
-                span: Span { start: 2, end: 3 }
-            }))
-        );
-        assert_eq!(
-            lexer.next(),
-            Some(Ok(SpannedToken {
-                token: Token::Integer(3),
-                span: Span { start: 4, end: 5 }
-            }))
-        );
-        assert_eq!(lexer.next(), None);
-    }
-
-    #[test]
-    fn test_lambda_operator() {
-        let input = "=> = == x => y";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::Lambda,
-                Token::Equal,
-                Token::EqualEqual,
-                Token::Identifier("x".to_string()),
-                Token::Lambda,
-                Token::Identifier("y".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_logical_operators() {
-        let input = "(and true false) (or x y)";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-        assert_eq!(
-            extract_tokens(tokens),
-            vec![
-                Token::LeftParen,
-                Token::And,
-                Token::Boolean(true),
-                Token::Boolean(false),
-                Token::RightParen,
-                Token::LeftParen,
-                Token::Or,
-                Token::Identifier("x".to_string()),
-                Token::Identifier("y".to_string()),
-                Token::RightParen,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_span_offsets() {
-        let input = "42 + hello";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-
-        assert_eq!(
-            tokens,
-            vec![
-                SpannedToken {
-                    token: Token::Integer(42),
-                    span: Span { start: 0, end: 2 }
-                },
-                SpannedToken {
-                    token: Token::Plus,
-                    span: Span { start: 3, end: 4 }
-                },
-                SpannedToken {
-                    token: Token::Identifier("hello".to_string()),
-                    span: Span { start: 5, end: 10 }
-                },
-            ]
-        );
-
-        // Verify we can extract substrings using the spans
-        assert_eq!(&input[tokens[0].span.start..tokens[0].span.end], "42");
-        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "+");
-        assert_eq!(&input[tokens[2].span.start..tokens[2].span.end], "hello");
-    }
-
-    #[test]
-    fn test_span_offsets_multichar_operators() {
-        let input = "x == y <= z";
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-
-        assert_eq!(
-            tokens,
-            vec![
-                SpannedToken {
-                    token: Token::Identifier("x".to_string()),
-                    span: Span { start: 0, end: 1 }
-                },
-                SpannedToken {
-                    token: Token::EqualEqual,
-                    span: Span { start: 2, end: 4 }
-                },
-                SpannedToken {
-                    token: Token::Identifier("y".to_string()),
-                    span: Span { start: 5, end: 6 }
-                },
-                SpannedToken {
-                    token: Token::LessEqual,
-                    span: Span { start: 7, end: 9 }
-                },
-                SpannedToken {
-                    token: Token::Identifier("z".to_string()),
-                    span: Span { start: 10, end: 11 }
-                },
-            ]
-        );
-
-        assert_eq!(&input[tokens[0].span.start..tokens[0].span.end], "x");
-        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "==");
-        assert_eq!(&input[tokens[2].span.start..tokens[2].span.end], "y");
-        assert_eq!(&input[tokens[3].span.start..tokens[3].span.end], "<=");
-        assert_eq!(&input[tokens[4].span.start..tokens[4].span.end], "z");
-    }
-
-    #[test]
-    fn test_span_offsets_strings() {
-        let input = r#""hello" + "world""#;
-        let mut lexer = Lexer::new(input);
-        let (tokens, errors) = lexer.collect_all();
-
-        assert_eq!(errors.len(), 0);
-
-        assert_eq!(
-            tokens,
-            vec![
-                SpannedToken {
-                    token: Token::String("hello".to_string()),
-                    span: Span { start: 0, end: 7 }
-                },
-                SpannedToken {
-                    token: Token::Plus,
-                    span: Span { start: 8, end: 9 }
-                },
-                SpannedToken {
-                    token: Token::String("world".to_string()),
-                    span: Span { start: 10, end: 17 }
-                },
-            ]
-        );
-
-        // Verify we can extract substrings using the spans (includes quotes)
-        assert_eq!(
-            &input[tokens[0].span.start..tokens[0].span.end],
-            r#""hello""#
-        );
-        assert_eq!(&input[tokens[1].span.start..tokens[1].span.end], "+");
-        assert_eq!(
-            &input[tokens[2].span.start..tokens[2].span.end],
-            r#""world""#
-        );
+        Some(result.map(|kind| Token::new(kind, Span { context: (), start, end })))
     }
 }

@@ -21,24 +21,24 @@ pub fn report_errors(
 
     for error in errors {
         let diagnostic = match error {
-            LexError::UnexpectedChar(pos) => {
-                Diagnostic::error()
-                    .with_message("unexpected character")
-                    .with_labels(vec![Label::primary(file_id, *pos..*pos + 1)
-                        .with_message("this character is not valid here")])
-            }
-            LexError::UnterminatedString(pos) => {
-                Diagnostic::error()
-                    .with_message("unterminated string literal")
-                    .with_labels(vec![Label::primary(file_id, *pos..*pos + 1)
-                        .with_message("string starts here but is never closed")])
-                    .with_notes(vec![
-                        "string literals must be terminated with a closing quote".to_string(),
-                    ])
-            }
+            LexError::UnexpectedChar(pos) => Diagnostic::error()
+                .with_message("unexpected character")
+                .with_labels(vec![
+                    Label::primary(file_id, *pos..*pos + 1)
+                        .with_message("this character is not valid here"),
+                ]),
+            LexError::UnterminatedString(pos) => Diagnostic::error()
+                .with_message("unterminated string literal")
+                .with_labels(vec![
+                    Label::primary(file_id, *pos..*pos + 1)
+                        .with_message("string starts here but is never closed"),
+                ])
+                .with_notes(vec![
+                    "string literals must be terminated with a closing quote".to_string(),
+                ]),
         };
 
-        term::emit_to_io_write(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
     }
 
     Ok(())
