@@ -25,6 +25,13 @@ pub fn report_resolution_errors(
                         .with_message("not found in this scope"),
                 ])
                 .with_notes(vec!["variables must be defined before use".to_string()]),
+            ResolutionError::DuplicateBinding(name, span) => Diagnostic::error()
+                .with_message(format!("variable `{}` is bound more than once", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("duplicate binding"),
+                ])
+                .with_notes(vec!["each variable can only be bound once in a pattern".to_string()]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;

@@ -44,6 +44,7 @@ pub enum BuiltinFn {
     FloatOfInt,
     Floor,
     Ceil,
+    TimeMicro,
 }
 
 pub static BUILTINS: Map<&'static str, BuiltinFn> = phf_map! {
@@ -53,6 +54,7 @@ pub static BUILTINS: Map<&'static str, BuiltinFn> = phf_map! {
     "float_of_int" => BuiltinFn::FloatOfInt,
     "floor" => BuiltinFn::Floor,
     "ceil" => BuiltinFn::Ceil,
+    "time_micro" => BuiltinFn::TimeMicro,
 
     "+" => BuiltinFn::IntAdd,
     "-" => BuiltinFn::IntSubtract,
@@ -129,5 +131,6 @@ pub fn builtin_type(builtin: &BuiltinFn) -> TypeScheme {
         FloatOfInt => mono(func(Type::Int, Type::Float)),
         Floor => mono(func(Type::Float, Type::Int)),
         Ceil => mono(func(Type::Float, Type::Int)),
+        TimeMicro => mono(func(Type::Unit, Type::Int)),
     }
 }

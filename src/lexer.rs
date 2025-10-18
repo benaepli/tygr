@@ -31,6 +31,8 @@ impl fmt::Display for Token {
 pub enum TokenKind {
     LeftParen,
     RightParen,
+    Comma,
+    Underscore,
 
     Plus,
     Minus,
@@ -87,6 +89,8 @@ impl fmt::Display for TokenKind {
         match self {
             TokenKind::LeftParen => write!(f, "("),
             TokenKind::RightParen => write!(f, ")"),
+            TokenKind::Comma => write!(f, ","),
+            TokenKind::Underscore => write!(f, "_"),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),
             TokenKind::Star => write!(f, "*"),
@@ -153,7 +157,7 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
 fn is_special_char(ch: char) -> bool {
     matches!(
         ch,
-        '(' | ')' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
+        '(' | ')' | ',' | '_' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
     )
 }
 
@@ -336,6 +340,8 @@ impl<'a> Iterator for Lexer<'a> {
         let result = match ch {
             '(' => Ok(TokenKind::LeftParen),
             ')' => Ok(TokenKind::RightParen),
+            ',' => Ok(TokenKind::Comma),
+            '_' => Ok(TokenKind::Underscore),
 
             '+' => Ok(self.next_or('.', TokenKind::PlusDot, TokenKind::Plus)),
             '-' => Ok(self.next_or('.', TokenKind::MinusDot, TokenKind::Minus)),

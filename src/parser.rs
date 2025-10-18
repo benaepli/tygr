@@ -7,18 +7,38 @@ use chumsky::span::SimpleSpan;
 
 pub type Span = SimpleSpan<usize>;
 
-/// A program is a list of declarations with a name and an expression.
-/// In other words, a program contains declarations of the form `let name = value`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Declaration {
-    pub name: String,
-    pub value: Expr,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {
     And,
     Or,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKind {
+    Var(String),
+    Unit,
+    Pair(Box<Pattern>, Box<Pattern>),
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub span: Span,
+}
+
+impl Pattern {
+    fn new(kind: PatternKind, span: Span) -> Self {
+        Pattern { kind, span }
+    }
+}
+
+/// A program is a list of declarations with a name and an expression.
+/// In other words, a program contains declarations of the form `let name = value`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Declaration {
+    pub pattern: Pattern,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,12 +56,14 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Var(String),
-    Lambda(String, Box<Expr>),
+    Lambda(Pattern, Box<Expr>),
     App(Box<Expr>, Box<Expr>),
-    Let(String, Box<Expr>, Box<Expr>),
+    Let(Pattern, Box<Expr>, Box<Expr>),
     Fix(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
 
+    UnitLit,
+    PairLit(Box<Expr>, Box<Expr>),
     IntLit(i64),
     FloatLit(f64),
     BoolLit(bool),
@@ -70,6 +92,39 @@ where
     )
 }
 
+fn pattern<'a, I>() -> impl Parser<'a, I, Pattern, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    recursive(|pat| {
+        let atom = choice((
+            select! { TokenKind::Identifier(s) => PatternKind::Var(s.clone()) },
+            just(TokenKind::Underscore).to(PatternKind::Wildcard),
+        ))
+        .map_with(|kind, e| Pattern::new(kind, e.span()));
+
+        let items = pat
+            .clone()
+            .separated_by(just(TokenKind::Comma))
+            .collect::<Vec<_>>();
+        let tuple_pat = items
+            .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen))
+            .map_with(|mut pats: Vec<Pattern>, e| {
+                if pats.is_empty() {
+                    Pattern::new(PatternKind::Unit, e.span())
+                } else {
+                    let last = pats.pop().unwrap();
+                    pats.into_iter().rfold(last, |acc, p| {
+                        let span = p.span.union(acc.span);
+                        Pattern::new(PatternKind::Pair(Box::new(p), Box::new(acc)), span)
+                    })
+                }
+            });
+
+        choice((atom, tuple_pat))
+    })
+}
+
 fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
@@ -85,9 +140,27 @@ where
             }
             .map_with(|kind, e| Expr::new(kind, e.span()));
 
-            let paren_expr = expr
+            let items = expr
                 .clone()
-                .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen));
+                .separated_by(just(TokenKind::Comma))
+                .at_least(0)
+                .collect::<Vec<_>>();
+
+            let paren_expr = items
+                .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen))
+                .map_with(|mut expressions: Vec<Expr>, e| {
+                    if expressions.is_empty() {
+                        Expr::new(ExprKind::UnitLit, e.span())
+                    } else if expressions.len() == 1 {
+                        expressions.pop().unwrap()
+                    } else {
+                        let last = expressions.pop().unwrap();
+                        expressions.into_iter().rfold(last, |acc, next| {
+                            let span = next.span.union(acc.span);
+                            Expr::new(ExprKind::PairLit(Box::new(next), Box::new(acc)), span)
+                        })
+                    }
+                });
 
             choice((paren_expr, atom))
         };
@@ -210,12 +283,12 @@ where
         );
 
         let let_expr = just(TokenKind::Let)
-            .ignore_then(select! { TokenKind::Identifier(s) => s.clone() })
+            .ignore_then(pattern())
             .then(expr.clone())
             .then_ignore(just(TokenKind::In))
             .then(expr.clone())
-            .map_with(|((id, e1), e2), e| {
-                Expr::new(ExprKind::Let(id, Box::new(e1), Box::new(e2)), e.span())
+            .map_with(|((pat, e1), e2), e| {
+                Expr::new(ExprKind::Let(pat, Box::new(e1), Box::new(e2)), e.span())
             });
 
         let if_expr = just(TokenKind::If)
@@ -232,10 +305,12 @@ where
             });
 
         let lambda_expr = just(TokenKind::Fn)
-            .ignore_then(select! { TokenKind::Identifier(s) => s.clone() })
+            .ignore_then(pattern())
             .then_ignore(just(TokenKind::Lambda))
             .then(expr.clone())
-            .map_with(|(id, e), extra| Expr::new(ExprKind::Lambda(id, Box::new(e)), extra.span()));
+            .map_with(|(pat, e), extra| {
+                Expr::new(ExprKind::Lambda(pat, Box::new(e)), extra.span())
+            });
 
         choice((let_expr, if_expr, lambda_expr, or))
     })
@@ -246,10 +321,10 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     just(TokenKind::Let)
-        .ignore_then(select! { TokenKind::Identifier(s) => s.clone() })
+        .ignore_then(pattern())
         .then_ignore(just(TokenKind::Equal))
         .then(expr())
-        .map(|(name, value)| Declaration { name, value })
+        .map(|(pattern, value)| Declaration { pattern, value })
 }
 
 pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>

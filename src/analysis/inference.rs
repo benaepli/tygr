@@ -1,4 +1,6 @@
-use crate::analysis::resolver::{Name, Resolved, ResolvedKind};
+use crate::analysis::resolver::{
+    Name, Resolved, ResolvedKind, ResolvedPattern, ResolvedPatternKind,
+};
 use crate::builtin::{BuiltinFn, builtin_type};
 use crate::parser::{BinOp, Span};
 use std::collections::{HashMap, HashSet};
@@ -24,28 +26,49 @@ pub struct TypeScheme {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
+    Unit,
     Int,
     Float,
     Bool,
     String,
     Var(TypeID),
+    Pair(Rc<Type>, Rc<Type>),
     Function(Rc<Type>, Rc<Type>),
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Type::Unit => write!(f, "unit"),
             Type::Int => write!(f, "int"),
             Type::Float => write!(f, "float"),
             Type::Bool => write!(f, "bool"),
             Type::String => write!(f, "string"),
             Type::Var(id) => write!(f, "'{}", id),
+            Type::Pair(a, b) => write!(f, "({} * {})", a, b),
             Type::Function(arg, ret) => match arg.as_ref() {
                 Type::Function(_, _) => write!(f, "({}) -> {}", arg, ret),
                 _ => write!(f, "{} -> {}", arg, ret),
             },
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedPattern {
+    pub kind: TypedPatternKind,
+    pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedPatternKind {
+    Var {
+        name: Name,
+    },
+    Unit,
+    Pair(Box<TypedPattern>, Box<TypedPattern>),
+    Wildcard,
 }
 
 #[derive(Debug, Clone)]
@@ -59,19 +82,21 @@ pub struct Typed {
 pub enum TypedKind {
     Var(Name),
     Lambda {
-        param: Name,
+        param: TypedPattern,
         body: Box<Typed>,
         captures: HashSet<Name>,
     },
     App(Box<Typed>, Box<Typed>),
     Let {
-        name: Name,
+        name: TypedPattern,
         value: Box<Typed>,
         body: Box<Typed>,
     },
     Fix(Box<Typed>),
     If(Box<Typed>, Box<Typed>, Box<Typed>),
 
+    UnitLit,
+    PairLit(Box<Typed>, Box<Typed>),
     IntLit(i64),
     FloatLit(f64),
     BoolLit(bool),
@@ -104,12 +129,10 @@ pub enum TypeError {
 
 impl Inferrer {
     pub fn new() -> Self {
-        let inferrer = Self {
+        Self {
             substitution: HashMap::new(),
             next_var: TypeID(0),
-        };
-
-        inferrer
+        }
     }
 
     fn new_type(&mut self) -> Rc<Type> {
@@ -126,6 +149,11 @@ impl Inferrer {
                 } else {
                     ty.clone()
                 }
+            }
+            Type::Pair(a, b) => {
+                let a_subst = self.apply_subst(a);
+                let b_subst = self.apply_subst(b);
+                Rc::new(Type::Pair(a_subst, b_subst))
             }
             Type::Function(arg, ret) => {
                 let arg_subst = self.apply_subst(arg);
@@ -157,6 +185,11 @@ impl Inferrer {
                     ty.clone()
                 }
             }
+            Type::Pair(a, b) => {
+                let new_a = self.instantiate_with_mapping(a, mapping);
+                let new_b = self.instantiate_with_mapping(b, mapping);
+                Rc::new(Type::Pair(new_a, new_b))
+            }
             Type::Function(arg, ret) => {
                 let new_arg = self.instantiate_with_mapping(arg, mapping);
                 let new_ret = self.instantiate_with_mapping(ret, mapping);
@@ -170,6 +203,7 @@ impl Inferrer {
         let ty = self.apply_subst(ty);
         match ty.as_ref() {
             Type::Var(var_id) => *var_id == id,
+            Type::Pair(a, b) => self.occurs(id, a) || self.occurs(id, b),
             Type::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
             _ => false,
         }
@@ -180,13 +214,12 @@ impl Inferrer {
         let t2 = self.apply_subst(t2);
 
         match (t1.as_ref(), t2.as_ref()) {
-            // Same concrete types
-            (Type::Int, Type::Int)
+            (Type::Unit, Type::Unit)
+            | (Type::Int, Type::Int)
             | (Type::Float, Type::Float)
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String) => Ok(()),
 
-            // Type variable cases
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => Ok(()),
             (Type::Var(id), _) => {
                 if self.occurs(*id, &t2) {
@@ -200,6 +233,12 @@ impl Inferrer {
                     return Err(TypeError::OccursCheck(*id, t1.clone(), span));
                 }
                 self.substitution.insert(*id, t1.clone());
+                Ok(())
+            }
+
+            (Type::Pair(a1, b1), Type::Pair(a2, b2)) => {
+                self.unify(a1, a2, span)?;
+                self.unify(b1, b2, span)?;
                 Ok(())
             }
 
@@ -218,6 +257,11 @@ impl Inferrer {
             Type::Var(id) => {
                 let mut set = HashSet::new();
                 set.insert(*id);
+                set
+            }
+            Type::Pair(a, b) => {
+                let mut set = self.free_in_type(a);
+                set.extend(self.free_in_type(b));
                 set
             }
             Type::Function(arg, ret) => {
@@ -260,6 +304,49 @@ impl Inferrer {
         self.infer_type(&env, expr)
     }
 
+    fn infer_pattern(
+        &mut self,
+        pat: ResolvedPattern,
+        new_env: &mut Environment,
+    ) -> Result<TypedPattern, TypeError> {
+        let span = pat.span;
+        match pat.kind {
+            ResolvedPatternKind::Var(name) => {
+                let ty = self.new_type();
+                let scheme = TypeScheme {
+                    vars: vec![],
+                    ty: ty.clone(),
+                };
+                new_env.insert(name, scheme);
+                Ok(TypedPattern {
+                    kind: TypedPatternKind::Var { name },
+                    ty,
+                    span,
+                })
+            }
+            ResolvedPatternKind::Wildcard => Ok(TypedPattern {
+                kind: TypedPatternKind::Wildcard,
+                ty: self.new_type(),
+                span,
+            }),
+            ResolvedPatternKind::Unit => Ok(TypedPattern {
+                kind: TypedPatternKind::Unit,
+                ty: Rc::new(Type::Unit),
+                span,
+            }),
+            ResolvedPatternKind::Pair(p1, p2) => {
+                let typed_p1 = self.infer_pattern(*p1, new_env)?;
+                let typed_p2 = self.infer_pattern(*p2, new_env)?;
+                let pair_ty = Rc::new(Type::Pair(typed_p1.ty.clone(), typed_p2.ty.clone()));
+                Ok(TypedPattern {
+                    kind: TypedPatternKind::Pair(Box::new(typed_p1), Box::new(typed_p2)),
+                    ty: pair_ty,
+                    span,
+                })
+            }
+        }
+    }
+
     fn infer_type(&mut self, env: &Environment, expr: Resolved) -> Result<Typed, TypeError> {
         let span = expr.span;
         match expr.kind {
@@ -283,6 +370,21 @@ impl Inferrer {
                 ty: Rc::new(Type::String),
                 span,
             }),
+            ResolvedKind::UnitLit => Ok(Typed {
+                kind: TypedKind::UnitLit,
+                ty: Rc::new(Type::Unit),
+                span,
+            }),
+            ResolvedKind::PairLit(first, second) => {
+                let typed_first = self.infer_type(env, *first)?;
+                let typed_second = self.infer_type(env, *second)?;
+                let pair_ty = Rc::new(Type::Pair(typed_first.ty.clone(), typed_second.ty.clone()));
+                Ok(Typed {
+                    kind: TypedKind::PairLit(Box::new(typed_first), Box::new(typed_second)),
+                    ty: pair_ty,
+                    span,
+                })
+            }
             ResolvedKind::Var(name) => {
                 let scheme = env
                     .get(&name)
@@ -300,24 +402,18 @@ impl Inferrer {
                 body,
                 captures,
             } => {
-                let param_ty = self.new_type();
-                let param_scheme = TypeScheme {
-                    vars: vec![],
-                    ty: param_ty.clone(),
-                };
-
                 let mut new_env = env.clone();
-                new_env.insert(param, param_scheme);
+                let typed_param = self.infer_pattern(param, &mut new_env)?;
 
                 let typed_body = self.infer_type(&new_env, *body)?;
                 let body_ty = self.apply_subst(&typed_body.ty);
-                let param_ty_subst = self.apply_subst(&param_ty);
+                let param_ty_subst = self.apply_subst(&typed_param.ty);
 
                 let fn_ty = Rc::new(Type::Function(param_ty_subst, body_ty));
 
                 Ok(Typed {
                     kind: TypedKind::Lambda {
-                        param,
+                        param: typed_param,
                         body: Box::new(typed_body),
                         captures,
                     },
@@ -344,20 +440,31 @@ impl Inferrer {
                 })
             }
 
-            ResolvedKind::Let { name, value, body } => {
+            ResolvedKind::Let {
+                pattern,
+                value,
+                body,
+            } => {
                 let typed_value = self.infer_type(env, *value)?;
                 let value_ty = self.apply_subst(&typed_value.ty);
-                let scheme = self.generalize(env, &value_ty);
 
-                let mut new_env = env.clone();
-                new_env.insert(name, scheme);
+                let mut new_env = Environment::new();
+                let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
 
-                let typed_body = self.infer_type(&new_env, *body)?;
+                self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                let mut extended_env = env.clone();
+                for (name, scheme) in new_env {
+                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
+                    extended_env.insert(name, s);
+                }
+
+                let typed_body = self.infer_type(&extended_env, *body)?;
                 let body_ty = self.apply_subst(&typed_body.ty);
 
                 Ok(Typed {
                     kind: TypedKind::Let {
-                        name,
+                        name: typed_pattern,
                         value: Box::new(typed_value),
                         body: Box::new(typed_body),
                     },

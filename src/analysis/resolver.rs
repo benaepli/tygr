@@ -1,5 +1,5 @@
 use crate::builtin::{BUILTINS, BuiltinFn};
-use crate::parser::{BinOp, Expr, ExprKind, Span};
+use crate::parser::{BinOp, Expr, ExprKind, Pattern, PatternKind, Span};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
@@ -10,6 +10,26 @@ pub struct Name(pub usize);
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedPatternKind {
+    Var(Name),
+    Unit,
+    Pair(Box<ResolvedPattern>, Box<ResolvedPattern>),
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPattern {
+    pub kind: ResolvedPatternKind,
+    pub span: Span,
+}
+
+impl ResolvedPattern {
+    fn new(kind: ResolvedPatternKind, span: Span) -> Self {
+        ResolvedPattern { kind, span }
     }
 }
 
@@ -29,19 +49,21 @@ impl Resolved {
 pub enum ResolvedKind {
     Var(Name),
     Lambda {
-        param: Name,
+        param: ResolvedPattern,
         body: Box<Resolved>,
         captures: HashSet<Name>,
     },
     App(Box<Resolved>, Box<Resolved>),
     Let {
-        name: Name,
+        pattern: ResolvedPattern,
         value: Box<Resolved>,
         body: Box<Resolved>,
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
+    UnitLit,
+    PairLit(Box<Resolved>, Box<Resolved>),
     IntLit(i64),
     FloatLit(f64),
     BoolLit(bool),
@@ -56,6 +78,8 @@ pub enum ResolvedKind {
 pub enum ResolutionError {
     #[error("variable `{0}` not found")]
     VariableNotFound(String, Span),
+    #[error("variable `{0}` is bound more than once in the same pattern")]
+    DuplicateBinding(String, Span),
 }
 
 type Scope = HashMap<String, Name>;
@@ -96,6 +120,32 @@ impl Resolver {
         Ok(resolved)
     }
 
+    fn analyze_pattern(
+        &mut self,
+        pat: Pattern,
+        scope: &mut Scope,
+    ) -> Result<ResolvedPattern, ResolutionError> {
+        let span = pat.span;
+        match pat.kind {
+            PatternKind::Var(name) => {
+                let new_id = self.new_name();
+                if scope.insert(name.clone(), new_id).is_some() {
+                    return Err(ResolutionError::DuplicateBinding(name, span));
+                }
+                Ok(ResolvedPattern::new(ResolvedPatternKind::Var(new_id), span))
+            }
+            PatternKind::Pair(p1, p2) => {
+                let resolved_p1 = self.analyze_pattern(*p1, scope)?;
+                let resolved_p2 = self.analyze_pattern(*p2, scope)?;
+
+                let kind = ResolvedPatternKind::Pair(Box::new(resolved_p1), Box::new(resolved_p2));
+                Ok(ResolvedPattern::new(kind, span))
+            }
+            PatternKind::Unit => Ok(ResolvedPattern::new(ResolvedPatternKind::Unit, span)),
+            PatternKind::Wildcard => Ok(ResolvedPattern::new(ResolvedPatternKind::Wildcard, span)),
+        }
+    }
+
     fn analyze(&mut self, expr: Expr) -> Result<(Resolved, HashSet<Name>), ResolutionError> {
         let span = expr.span;
         match expr.kind {
@@ -132,6 +182,20 @@ impl Resolver {
                 Resolved::new(ResolvedKind::StringLit(s), span),
                 HashSet::new(),
             )),
+            ExprKind::UnitLit => Ok((Resolved::new(ResolvedKind::UnitLit, span), HashSet::new())),
+            ExprKind::PairLit(first, second) => {
+                let (resolved_first, free_first) = self.analyze(*first)?;
+                let (resolved_second, free_second) = self.analyze(*second)?;
+                let all_free = free_first.union(&free_second).cloned().collect();
+                Ok((
+                    Resolved::new(
+                        ResolvedKind::PairLit(Box::new(resolved_first), Box::new(resolved_second)),
+                        span,
+                    ),
+                    all_free,
+                ))
+            }
+
 
             ExprKind::BinOp(op, a, b) => {
                 let (resolved_a, free_a) = self.analyze(*a)?;
@@ -190,23 +254,25 @@ impl Resolver {
                 ))
             }
 
-            ExprKind::Let(name, value, body) => {
+            ExprKind::Let(pattern, value, body) => {
                 let (resolved_value, free_in_value) = self.analyze(*value)?;
-                let new_id = self.new_name();
 
                 let mut new_scope = HashMap::new();
-                new_scope.insert(name, new_id);
-                self.scopes.push(new_scope);
+                let resolved = self.analyze_pattern(pattern, &mut new_scope)?;
 
+                self.scopes.push(new_scope.clone());
                 let (resolved_body, mut free_in_body) = self.analyze(*body)?;
                 self.scopes.pop();
 
-                free_in_body.remove(&new_id);
+                for name_id in new_scope.values() {
+                    free_in_body.remove(name_id);
+                }
+
                 let all_free = free_in_value.union(&free_in_body).cloned().collect();
                 Ok((
                     Resolved::new(
                         ResolvedKind::Let {
-                            name: new_id,
+                            pattern: resolved,
                             value: Box::new(resolved_value),
                             body: Box::new(resolved_body),
                         },
@@ -215,22 +281,23 @@ impl Resolver {
                     all_free,
                 ))
             }
-            ExprKind::Lambda(param, body) => {
-                let param_id = self.new_name();
 
+            ExprKind::Lambda(param_pattern, body) => {
                 let mut new_scope = HashMap::new();
-                new_scope.insert(param, param_id);
-                self.scopes.push(new_scope);
+                let resolved = self.analyze_pattern(param_pattern, &mut new_scope)?;
 
+                self.scopes.push(new_scope.clone());
                 let (resolved_body, mut free_in_body) = self.analyze(*body)?;
                 self.scopes.pop();
 
-                free_in_body.remove(&param_id);
+                for name_id in new_scope.values() {
+                    free_in_body.remove(name_id);
+                }
 
                 Ok((
                     Resolved::new(
                         ResolvedKind::Lambda {
-                            param: param_id,
+                            param: resolved,
                             body: Box::new(resolved_body),
                             captures: free_in_body.clone(),
                         },
