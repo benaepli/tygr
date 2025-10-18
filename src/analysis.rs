@@ -1,5 +1,6 @@
-pub mod resolver;
+pub mod format;
 pub mod inference;
+pub mod resolver;
 
 use crate::parser::{Declaration, Expr, ExprKind};
 

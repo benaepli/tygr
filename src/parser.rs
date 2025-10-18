@@ -1,7 +1,7 @@
 pub mod format;
 
 use crate::lexer::{Token, TokenKind};
-use chumsky::input::{BorrowInput, Stream};
+use chumsky::input::BorrowInput;
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
@@ -70,7 +70,7 @@ where
     )
 }
 
-pub fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
+fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
@@ -241,7 +241,7 @@ where
     })
 }
 
-pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
+fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
@@ -265,11 +265,11 @@ where
 fn make_input(
     eoi: SimpleSpan,
     tokens: &[Token],
-) -> impl BorrowInput<Token = TokenKind, Span = SimpleSpan> + Clone {
-    tokens.map(eoi, |(t)| (&t.kind, &t.span))
+) -> impl BorrowInput<'_, Token = TokenKind, Span = SimpleSpan> + Clone {
+    tokens.map(eoi, |t| (&t.kind, &t.span))
 }
 
-pub fn parse_program(tokens: &[Token]) -> ParseResult<Vec<Declaration>, Rich<TokenKind>> {
+pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
     let input = make_input((0..len).into(), &tokens);
 

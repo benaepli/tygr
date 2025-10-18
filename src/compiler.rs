@@ -1,10 +1,11 @@
 use crate::analysis::desugar;
+use crate::analysis::format::{report_resolution_errors, report_type_errors};
+use crate::analysis::inference::Inferrer;
 use crate::analysis::resolver::Resolver;
-use crate::lexer::{Lexer, TokenKind};
-use crate::parser::{Span, program, parse_program};
+use crate::lexer::Lexer;
+use crate::parser::parse_program;
 use crate::{lexer, parser};
 use anyhow::anyhow;
-use chumsky::Parser;
 
 pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
     let mut lexer = Lexer::new(input);
@@ -27,7 +28,23 @@ pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
         None => return Err(anyhow!("non-empty file expected")),
     };
     let mut resolver = Resolver::new();
-    let resolved = resolver.resolve(desugared)?;
-    dbg!(resolved);
+    let resolved = match resolver.resolve(desugared) {
+        Err(e) => {
+            report_resolution_errors(input, &[e], name)?;
+            return Ok(());
+        }
+        Ok(r) => r,
+    };
+    let mut inferrer = Inferrer::new();
+    let typed = match inferrer.infer(resolved) {
+        Err(e) => {
+            report_type_errors(input, &[e], name)?;
+            return Ok(());
+        }
+        Ok(t) => t,
+    };
+    dbg!(typed);
+
+    // dbg!(resolved);
     Ok(())
 }

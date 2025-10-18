@@ -99,7 +99,7 @@ fn func(a: Type, b: Type) -> Type {
     Type::Function(Rc::new(a), Rc::new(b))
 }
 
-pub fn builtin_types(builtin: &BuiltinFn) -> TypeScheme {
+pub fn builtin_type(builtin: &BuiltinFn) -> TypeScheme {
     use BuiltinFn::*;
 
     match builtin {

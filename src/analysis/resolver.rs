@@ -1,10 +1,17 @@
 use crate::builtin::{BUILTINS, BuiltinFn};
 use crate::parser::{BinOp, Expr, ExprKind, Span};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Name(pub usize);
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resolved {
