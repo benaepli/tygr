@@ -13,29 +13,8 @@ pub struct Declaration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    AddFloat,
-    SubtractFloat,
-    MultiplyFloat,
-    DivideFloat,
-    Equal,
-    NotEqual,
-    LessEqual,
-    GreaterEqual,
-    Less,
-    Greater,
     And,
     Or,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum UnaryOp {
-    Negate,
-    NegateFloat,
-    Not,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,9 +29,26 @@ pub enum Expr {
     IntLit(i64),
     DoubleLit(f64),
     BoolLit(bool),
+    StringLit(String),
 
     BinOp(BinOp, Box<Expr>, Box<Expr>),
-    UnaryOp(UnaryOp, Box<Expr>),
+}
+
+fn build_bin_op<'a, OP, P>(
+    op_parser: OP,
+    next_parser: P,
+) -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Token>>> + Clone
+where
+    OP: Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Token>>> + Clone,
+    P: Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Token>>> + Clone,
+{
+    next_parser.clone().foldl(
+        op_parser.then(next_parser).repeated(),
+        |left, (op_fn, right)| {
+            let func = Expr::App(Box::new(op_fn), Box::new(left));
+            Expr::App(Box::new(func), Box::new(right))
+        },
+    )
 }
 
 pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Token>>> {
@@ -62,6 +58,7 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
                 Token::Integer(i) => Expr::IntLit(i),
                 Token::Double(d) => Expr::DoubleLit(d),
                 Token::Boolean(b) => Expr::BoolLit(b),
+                Token::String(s) => Expr::StringLit(s.clone()),
                 Token::Identifier(s) => Expr::Var(s.clone()),
             };
 
@@ -75,14 +72,17 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
         let unary = recursive(|unary| {
             choice((
                 just(Token::Minus)
-                    .ignore_then(unary.clone())
-                    .map(|e| Expr::UnaryOp(UnaryOp::Negate, Box::new(e))),
+                    .to(Expr::Var("~".to_string()))
+                    .then(unary.clone())
+                    .map(|(op_fn, val)| Expr::App(Box::new(op_fn), Box::new(val))),
                 just(Token::MinusDot)
-                    .ignore_then(unary.clone())
-                    .map(|e| Expr::UnaryOp(UnaryOp::NegateFloat, Box::new(e))),
+                    .to(Expr::Var("~.".to_string()))
+                    .then(unary.clone())
+                    .map(|(op_fn, val)| Expr::App(Box::new(op_fn), Box::new(val))),
                 just(Token::Bang)
-                    .ignore_then(unary.clone())
-                    .map(|e| Expr::UnaryOp(UnaryOp::Not, Box::new(e))),
+                    .to(Expr::Var("!".to_string()))
+                    .then(unary.clone())
+                    .map(|(op_fn, val)| Expr::App(Box::new(op_fn), Box::new(val))),
                 simple,
             ))
         });
@@ -100,46 +100,58 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
             })
         };
 
-        let factor = apply.clone().foldl(
-            choice((
-                just(Token::Star).to(BinOp::Multiply),
-                just(Token::Slash).to(BinOp::Divide),
-                just(Token::StarDot).to(BinOp::MultiplyFloat),
-                just(Token::SlashDot).to(BinOp::DivideFloat),
-            ))
-            .then(apply)
-            .repeated(),
-            |left, (op, right)| Expr::BinOp(op, Box::new(left), Box::new(right)),
-        );
+        let factor = {
+            let op = choice((
+                just(Token::Star).to(Expr::Var("*".to_string())),
+                just(Token::Slash).to(Expr::Var("/".to_string())),
+                just(Token::StarDot).to(Expr::Var("*.".to_string())),
+                just(Token::SlashDot).to(Expr::Var("/.".to_string())),
+            ));
+            build_bin_op(op, apply)
+        };
 
-        let term = factor.clone().foldl(
-            choice((
-                just(Token::Plus).to(BinOp::Add),
-                just(Token::Minus).to(BinOp::Subtract),
-                just(Token::PlusDot).to(BinOp::AddFloat),
-                just(Token::MinusDot).to(BinOp::SubtractFloat),
-            ))
-            .then(factor)
-            .repeated(),
-            |left, (op, right)| Expr::BinOp(op, Box::new(left), Box::new(right)),
-        );
+        let term = {
+            let op = choice((
+                just(Token::Plus).to(Expr::Var("+".to_string())),
+                just(Token::Minus).to(Expr::Var("-".to_string())),
+                just(Token::PlusDot).to(Expr::Var("+.".to_string())),
+                just(Token::MinusDot).to(Expr::Var("-.".to_string())),
+            ));
+            build_bin_op(op, factor)
+        };
 
-        let compare = term
+        let concat = {
+            let op = just(Token::Caret).to(Expr::Var("^".to_string()));
+            build_bin_op(op, term)
+        };
+
+        let compare = concat
             .clone()
             .then(
                 choice((
-                    just(Token::EqualEqual).to(BinOp::Equal),
-                    just(Token::BangEqual).to(BinOp::NotEqual),
-                    just(Token::LessEqual).to(BinOp::LessEqual),
-                    just(Token::GreaterEqual).to(BinOp::GreaterEqual),
-                    just(Token::Less).to(BinOp::Less),
-                    just(Token::Greater).to(BinOp::Greater),
+                    just(Token::EqualEqual).to(Expr::Var("==".to_string())),
+                    just(Token::BangEqual).to(Expr::Var("!=".to_string())),
+                    just(Token::LessEqual).to(Expr::Var("<=".to_string())),
+                    just(Token::GreaterEqual).to(Expr::Var(">=".to_string())),
+                    just(Token::Less).to(Expr::Var("<".to_string())),
+                    just(Token::Greater).to(Expr::Var(">".to_string())),
+                    just(Token::EqualEqualDot).to(Expr::Var("==.".to_string())),
+                    just(Token::BangEqualDot).to(Expr::Var("!=.".to_string())),
+                    just(Token::GreaterEqualDot).to(Expr::Var(">=.".to_string())),
+                    just(Token::LessEqualDot).to(Expr::Var("<=.".to_string())),
+                    just(Token::GreaterDot).to(Expr::Var(">.".to_string())),
+                    just(Token::LessDot).to(Expr::Var("<.".to_string())),
+                    just(Token::EqualEqualB).to(Expr::Var("==b".to_string())),
+                    just(Token::BangEqualB).to(Expr::Var("!=b".to_string())),
                 ))
-                .then(term)
+                .then(concat)
                 .or_not(),
             )
             .map(|(left, op_right_opt)| match op_right_opt {
-                Some((op, right)) => Expr::BinOp(op, Box::new(left), Box::new(right)),
+                Some((op_fn, right)) => {
+                    let func = Expr::App(Box::new(op_fn), Box::new(left));
+                    Expr::App(Box::new(func), Box::new(right))
+                }
                 None => left,
             });
 

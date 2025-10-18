@@ -34,7 +34,7 @@ where
             .with_labels(vec![
                 Label::primary(file_id, span.start..span.end).with_message(error.to_string()),
             ]);
-        term::emit(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_io_write(&mut writer.lock(), &config, &files, &diagnostic)?;
     }
 
     Ok(())

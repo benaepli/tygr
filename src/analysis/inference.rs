@@ -1,6 +1,6 @@
 use crate::analysis::resolver::{Name, Resolved};
 use crate::builtin::BuiltinFn;
-use crate::parser::{BinOp, UnaryOp};
+use crate::parser::BinOp;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::rc::Rc;
@@ -19,6 +19,7 @@ pub enum Type {
     Int,
     Double,
     Bool,
+    String,
     Var(TypeID),
     Function(Rc<Type>, Rc<Type>),
 }
@@ -47,9 +48,9 @@ pub enum TypedKind {
     IntLit(i64),
     DoubleLit(f64),
     BoolLit(bool),
+    StringLit(String),
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
-    UnaryOp(UnaryOp, Box<Typed>),
 
     Builtin(BuiltinFn),
 }

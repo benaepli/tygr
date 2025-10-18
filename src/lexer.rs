@@ -30,6 +30,7 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Caret,
 
     PlusDot,
     MinusDot,
@@ -53,6 +54,16 @@ pub enum Token {
     Less,
     Greater,
 
+    EqualEqualDot,
+    BangEqualDot,
+    GreaterEqualDot,
+    LessEqualDot,
+    GreaterDot,
+    LessDot,
+
+    EqualEqualB,
+    BangEqualB,
+
     And,
     Or,
 
@@ -74,6 +85,7 @@ impl fmt::Display for Token {
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
+            Token::Caret => write!(f, "^"),
             Token::PlusDot => write!(f, "+."),
             Token::MinusDot => write!(f, "-."),
             Token::StarDot => write!(f, "*."),
@@ -88,6 +100,16 @@ impl fmt::Display for Token {
             Token::BangEqual => write!(f, "!="),
             Token::LessEqual => write!(f, "<="),
             Token::GreaterEqual => write!(f, ">="),
+
+            Token::EqualEqualDot => write!(f, "==."),
+            Token::BangEqualDot => write!(f, "!=."),
+            Token::GreaterEqualDot => write!(f, ">=."),
+            Token::LessEqualDot => write!(f, "<=."),
+            Token::GreaterDot => write!(f, ">."),
+            Token::LessDot => write!(f, "<."),
+
+            Token::EqualEqualB => write!(f, "==b"),
+            Token::BangEqualB => write!(f, "!=b"),
 
             Token::Identifier(s) => write!(f, "{}", s),
             Token::String(s) => write!(f, "\"{}\"", s),
@@ -125,7 +147,7 @@ static KEYWORDS: phf::Map<&'static str, Token> = phf_map! {
 fn is_special_char(ch: char) -> bool {
     matches!(
         ch,
-        '(' | ')' | '+' | '-' | '*' | '/' | '!' | '>' | '<' | '=' | '"'
+        '(' | ')' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
     )
 }
 
@@ -319,13 +341,54 @@ impl<'a> Iterator for Lexer<'a> {
             }
             '/' => Ok(self.next_or('.', Token::SlashDot, Token::Slash)),
 
-            '!' => Ok(self.next_or('=', Token::BangEqual, Token::Bang)),
-            '=' => {
-                let first = self.next_or('>', Token::Lambda, Token::Equal);
-                Ok(self.next_or('=', Token::EqualEqual, first))
+            '^' => Ok(Token::Caret),
+
+            '!' => {
+                if self.match_next('=') {
+                    if self.match_next('b') {
+                        Ok(Token::BangEqualB)
+                    } else if self.match_next('.') {
+                        Ok(Token::BangEqualDot)
+                    } else {
+                        Ok(Token::BangEqual)
+                    }
+                } else {
+                    Ok(Token::Bang)
+                }
             }
-            '>' => Ok(self.next_or('=', Token::GreaterEqual, Token::Greater)),
-            '<' => Ok(self.next_or('=', Token::LessEqual, Token::Less)),
+            '=' => {
+                if self.match_next('>') {
+                    Ok(Token::Lambda)
+                } else if self.match_next('=') {
+                    if self.match_next('b') {
+                        Ok(Token::EqualEqualB)
+                    } else if self.match_next('.') {
+                        Ok(Token::EqualEqualDot)
+                    } else {
+                        Ok(Token::EqualEqual)
+                    }
+                } else {
+                    Ok(Token::Equal)
+                }
+            }
+            '>' => {
+                if self.match_next('=') {
+                    Ok(self.next_or('.', Token::GreaterEqualDot, Token::GreaterEqual))
+                } else if self.match_next('.') {
+                    Ok(Token::GreaterDot)
+                } else {
+                    Ok(Token::Greater)
+                }
+            }
+            '<' => {
+                if self.match_next('=') {
+                    Ok(self.next_or('.', Token::LessEqualDot, Token::LessEqual))
+                } else if self.match_next('.') {
+                    Ok(Token::LessDot)
+                } else {
+                    Ok(Token::Less)
+                }
+            }
 
             '"' => self.parse_string(start),
 

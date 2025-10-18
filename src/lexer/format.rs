@@ -38,7 +38,7 @@ pub fn report_errors(
             }
         };
 
-        term::emit(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_io_write(&mut writer.lock(), &config, &files, &diagnostic)?;
     }
 
     Ok(())

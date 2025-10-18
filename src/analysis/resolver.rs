@@ -1,5 +1,5 @@
 use crate::builtin::{BUILTINS, BuiltinFn};
-use crate::parser::{BinOp, Expr, UnaryOp};
+use crate::parser::{BinOp, Expr};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -26,9 +26,9 @@ pub enum Resolved {
     IntLit(i64),
     DoubleLit(f64),
     BoolLit(bool),
+    StringLit(String),
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
-    UnaryOp(UnaryOp, Box<Resolved>),
 
     Builtin(BuiltinFn),
 }
@@ -97,6 +97,7 @@ impl Resolver {
             Expr::IntLit(i) => Ok((Resolved::IntLit(i), HashSet::new())),
             Expr::DoubleLit(d) => Ok((Resolved::DoubleLit(d), HashSet::new())),
             Expr::BoolLit(b) => Ok((Resolved::BoolLit(b), HashSet::new())),
+            Expr::StringLit(s) => Ok((Resolved::StringLit(s), HashSet::new())),
 
             Expr::BinOp(op, a, b) => {
                 let (resolved_a, free_a) = self.analyze(*a)?;
@@ -106,10 +107,6 @@ impl Resolver {
                     Resolved::BinOp(op, Box::new(resolved_a), Box::new(resolved_b)),
                     all,
                 ))
-            }
-            Expr::UnaryOp(op, operand) => {
-                let (resolved_operand, free) = self.analyze(*operand)?;
-                Ok((Resolved::UnaryOp(op, Box::new(resolved_operand)), free))
             }
             Expr::App(func, arg) => {
                 let (resolved_func, free_func) = self.analyze(*func)?;
