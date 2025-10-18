@@ -165,6 +165,7 @@ where
             choice((paren_expr, atom))
         };
 
+        let simple2 = simple.clone();
         let unary = recursive(|unary| {
             choice((
                 just(TokenKind::Minus)
@@ -185,7 +186,7 @@ where
                     .map_with(|(op_fn, val), e| {
                         Expr::new(ExprKind::App(Box::new(op_fn), Box::new(val)), e.span())
                     }),
-                simple,
+                simple2,
             ))
         });
 
@@ -197,7 +198,7 @@ where
                 unary.clone(),
             ));
 
-            fix_or_unary.clone().foldl(unary.repeated(), |func, arg| {
+            fix_or_unary.clone().foldl(simple.repeated(), |func, arg| {
                 let span = func.span.union(arg.span);
                 Expr::new(ExprKind::App(Box::new(func), Box::new(arg)), span)
             })
@@ -284,6 +285,7 @@ where
 
         let let_expr = just(TokenKind::Let)
             .ignore_then(pattern())
+            .then_ignore(just(TokenKind::Equal))
             .then(expr.clone())
             .then_ignore(just(TokenKind::In))
             .then(expr.clone())

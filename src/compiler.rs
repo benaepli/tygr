@@ -1,13 +1,13 @@
 use crate::analysis::desugar;
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
-use crate::analysis::inference::Inferrer;
+use crate::analysis::inference::{Inferrer, Typed};
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
 use crate::parser::parse_program;
 use crate::{lexer, parser};
 use anyhow::anyhow;
 
-pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
+pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
     let mut lexer = Lexer::new(input);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(input, &errors, name)?;
@@ -17,7 +17,7 @@ pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
     let parsed = parse_program(&lexed);
     if parsed.has_errors() {
         parser::format::report_errors(input, parsed.errors(), name)?;
-        return Ok(());
+        return Err(anyhow!("parsing error"));
     }
     let output = match parsed.into_output() {
         None => return Err(anyhow!("no output generated")),
@@ -31,7 +31,7 @@ pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
     let resolved = match resolver.resolve(desugared) {
         Err(e) => {
             report_resolution_errors(input, &[e], name)?;
-            return Ok(());
+            return Err(anyhow!("resolution error"));
         }
         Ok(r) => r,
     };
@@ -39,12 +39,9 @@ pub fn compile(input: &str, name: &str) -> Result<(), anyhow::Error> {
     let typed = match inferrer.infer(resolved) {
         Err(e) => {
             report_type_errors(input, &[e], name)?;
-            return Ok(());
+            return Err(anyhow!("type inference error"));
         }
         Ok(t) => t,
     };
-    dbg!(typed);
-
-    // dbg!(resolved);
-    Ok(())
+    Ok(typed)
 }

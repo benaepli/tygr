@@ -63,9 +63,7 @@ pub struct TypedPattern {
 
 #[derive(Debug, Clone)]
 pub enum TypedPatternKind {
-    Var {
-        name: Name,
-    },
+    Var { name: Name },
     Unit,
     Pair(Box<TypedPattern>, Box<TypedPattern>),
     Wildcard,
@@ -476,9 +474,17 @@ impl Inferrer {
             ResolvedKind::Fix(inner_expr) => {
                 let typed_expr = self.infer_type(env, *inner_expr)?;
                 let a = self.new_type();
-                let fix_ty = Rc::new(Type::Function(a.clone(), a.clone()));
 
-                self.unify(&typed_expr.ty, &fix_ty, span)?;
+                // Constraint 1: The expression must have type 'a -> 'a.
+                let expected_generator_ty = Rc::new(Type::Function(a.clone(), a.clone()));
+                self.unify(&typed_expr.ty, &expected_generator_ty, span)?;
+
+                // Constraint 2: 'a' must itself be a function.
+                // This prevents using `fix` on simple values.
+                let function_shape = Rc::new(Type::Function(self.new_type(), self.new_type()));
+                self.unify(&a, &function_shape, span)?;
+
+                // The final type is 'a', which is now guaranteed to be a function.
                 let result_ty = self.apply_subst(&a);
 
                 Ok(Typed {

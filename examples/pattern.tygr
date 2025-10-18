@@ -1,0 +1,20 @@
+// Simple pair declaration
+let my_pair = (1, "hello")
+
+// Simple destructuring
+let (x, y) = (10, 20)
+
+// Nested destructuring
+let (a, (b, c)) = (true, (42, 3.14))
+
+// Destructuring with a wildcard
+let (_, z) = ("ignore", "keep")
+
+// Function with a pair pattern in the argument
+let add_pair = fn (n1, n2) => n1 + n2
+
+// Let expression using destructuring
+let result = let (first, second) = (5, 8) in first * second
+
+// Pattern matching with unit
+let () = ()

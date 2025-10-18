@@ -157,7 +157,7 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
 fn is_special_char(ch: char) -> bool {
     matches!(
         ch,
-        '(' | ')' | ',' | '_' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
+        '(' | ')' | ',' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
     )
 }
 
@@ -410,6 +410,15 @@ impl<'a> Iterator for Lexer<'a> {
         };
 
         let end = self.position;
-        Some(result.map(|kind| Token::new(kind, Span { context: (), start, end })))
+        Some(result.map(|kind| {
+            Token::new(
+                kind,
+                Span {
+                    context: (),
+                    start,
+                    end,
+                },
+            )
+        }))
     }
 }
