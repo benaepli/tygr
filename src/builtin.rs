@@ -41,12 +41,18 @@ pub enum BuiltinFn {
     Print,
     StringOfFloat,
     StringOfInt,
+    FloatOfInt,
+    Floor,
+    Ceil,
 }
 
 pub static BUILTINS: Map<&'static str, BuiltinFn> = phf_map! {
     "print" => BuiltinFn::Print,
     "string_of_float" => BuiltinFn::StringOfFloat,
     "string_of_int" => BuiltinFn::StringOfInt,
+    "float_of_int" => BuiltinFn::FloatOfInt,
+    "floor" => BuiltinFn::Floor,
+    "ceil" => BuiltinFn::Ceil,
 
     "+" => BuiltinFn::IntAdd,
     "-" => BuiltinFn::IntSubtract,
@@ -100,32 +106,28 @@ pub fn builtin_types(builtin: &BuiltinFn) -> TypeScheme {
         IntAdd | IntSubtract | IntMultiply | IntDivide => {
             mono(func(Type::Int, func(Type::Int, Type::Int)))
         }
-
         FloatAdd | FloatSubtract | FloatMultiply | FloatDivide => {
-            mono(func(Type::Double, func(Type::Double, Type::Double)))
+            mono(func(Type::Float, func(Type::Float, Type::Float)))
         }
 
         IntEqual | IntNotEqual | IntLessEqual | IntGreaterEqual | IntLess | IntGreater => {
             mono(func(Type::Int, func(Type::Int, Type::Bool)))
         }
-
         FloatEqual | FloatNotEqual | FloatLessEqual | FloatGreaterEqual | FloatLess
-        | FloatGreater => mono(func(Type::Double, func(Type::Double, Type::Bool))),
-
+        | FloatGreater => mono(func(Type::Float, func(Type::Float, Type::Bool))),
         BoolEqual | BoolNotEqual => mono(func(Type::Bool, func(Type::Bool, Type::Bool))),
 
         IntNegate => mono(func(Type::Int, Type::Int)),
-
-        FloatNegate => mono(func(Type::Double, Type::Double)),
-
+        FloatNegate => mono(func(Type::Float, Type::Float)),
         Not => mono(func(Type::Bool, Type::Bool)),
 
         StringConcat => mono(func(Type::String, func(Type::String, Type::String))),
 
         Print => mono(func(Type::String, Type::String)),
-
-        StringOfFloat => mono(func(Type::Double, Type::String)),
-
+        StringOfFloat => mono(func(Type::Float, Type::String)),
         StringOfInt => mono(func(Type::Int, Type::String)),
+        FloatOfInt => mono(func(Type::Int, Type::Float)),
+        Floor => mono(func(Type::Float, Type::Int)),
+        Ceil => mono(func(Type::Float, Type::Int)),
     }
 }

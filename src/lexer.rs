@@ -39,7 +39,7 @@ pub enum Token {
 
     Identifier(String),
     String(String),
-    Double(f64),
+    Float(f64),
     Integer(i64),
     Boolean(bool),
 
@@ -113,7 +113,7 @@ impl fmt::Display for Token {
 
             Token::Identifier(s) => write!(f, "{}", s),
             Token::String(s) => write!(f, "\"{}\"", s),
-            Token::Double(d) => write!(f, "{}", d),
+            Token::Float(d) => write!(f, "{}", d),
             Token::Integer(i) => write!(f, "{}", i),
             Token::Boolean(b) => write!(f, "{}", b),
 
@@ -290,7 +290,7 @@ impl<'a> Lexer<'a> {
         if has_decimal {
             num_str
                 .parse()
-                .map(Token::Double)
+                .map(Token::Float)
                 .map_err(|_| LexError::UnexpectedChar(start))
         } else {
             num_str
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn test_doubles() {
+    fn test_floats() {
         let input = "3.14 0.5 99.99";
         let mut lexer = Lexer::new(input);
         let (tokens, errors) = lexer.collect_all();
@@ -504,15 +504,15 @@ mod tests {
         assert_eq!(
             extract_tokens(tokens),
             vec![
-                Token::Double(3.14),
-                Token::Double(0.5),
-                Token::Double(99.99),
+                Token::Float(3.14),
+                Token::Float(0.5),
+                Token::Float(99.99),
             ]
         );
     }
 
     #[test]
-    fn test_negative_doubles() {
+    fn test_negative_floats() {
         let input = "-3.14 -0.5";
         let mut lexer = Lexer::new(input);
         let (tokens, errors) = lexer.collect_all();
@@ -522,9 +522,9 @@ mod tests {
             extract_tokens(tokens),
             vec![
                 Token::Minus,
-                Token::Double(3.14),
+                Token::Float(3.14),
                 Token::Minus,
-                Token::Double(0.5),
+                Token::Float(0.5),
             ]
         );
     }

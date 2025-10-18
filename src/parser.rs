@@ -27,7 +27,7 @@ pub enum Expr {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
 
     IntLit(i64),
-    DoubleLit(f64),
+    FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
 
@@ -56,7 +56,7 @@ pub fn expr<'a>() -> impl Parser<'a, &'a [Token], Expr, extra::Err<Rich<'a, Toke
         let simple = {
             let atom = select! {
                 Token::Integer(i) => Expr::IntLit(i),
-                Token::Double(d) => Expr::DoubleLit(d),
+                Token::Float(d) => Expr::FloatLit(d),
                 Token::Boolean(b) => Expr::BoolLit(b),
                 Token::String(s) => Expr::StringLit(s.clone()),
                 Token::Identifier(s) => Expr::Var(s.clone()),

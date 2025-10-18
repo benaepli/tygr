@@ -24,7 +24,7 @@ pub enum Resolved {
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
     IntLit(i64),
-    DoubleLit(f64),
+    FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
 
@@ -95,7 +95,7 @@ impl Resolver {
             }
 
             Expr::IntLit(i) => Ok((Resolved::IntLit(i), HashSet::new())),
-            Expr::DoubleLit(d) => Ok((Resolved::DoubleLit(d), HashSet::new())),
+            Expr::FloatLit(d) => Ok((Resolved::FloatLit(d), HashSet::new())),
             Expr::BoolLit(b) => Ok((Resolved::BoolLit(b), HashSet::new())),
             Expr::StringLit(s) => Ok((Resolved::StringLit(s), HashSet::new())),
 

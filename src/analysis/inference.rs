@@ -3,6 +3,7 @@ use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::ops::Sub;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -17,7 +18,7 @@ pub struct TypeScheme {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
-    Double,
+    Float,
     Bool,
     String,
     Var(TypeID),
@@ -46,7 +47,7 @@ pub enum TypedKind {
     If(Box<Typed>, Box<Typed>, Box<Typed>),
 
     IntLit(i64),
-    DoubleLit(f64),
+    FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
 
@@ -59,6 +60,7 @@ type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
 
 pub struct Inferrer {
+    substitution: Substitution,
     next_var: TypeID,
 }
 
@@ -70,6 +72,16 @@ pub enum TypeError {
 }
 
 impl Inferrer {
+    pub fn new() -> Self {
+        let inferrer = Self {
+            substitution: HashMap::new(),
+            next_var: TypeID(0),
+        };
+        
+
+        inferrer
+    }
+
     fn new_type(&mut self) -> Rc<Type> {
         let id = self.next_var.0;
         self.next_var.0 += 1;
