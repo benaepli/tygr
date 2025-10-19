@@ -1,0 +1,31 @@
+// Basic immutable bindings
+let x = 5
+let y = 10
+
+let z = let x = 100 in x + 1  // z = 101, but outer x is still 5
+
+let _ = print(string_of_int x)
+
+// Pairs are immutable data structures
+let point = (3, 4)
+let (px, py) = point  // px = 3, py = 4
+
+// Functions create new values rather than mutating
+let increment = fn n => n + 1
+let value = 42
+let new_value = increment value  // new_value = 43, value = 42
+
+// Closures capture immutable snapshots of their environment
+let make_adder = fn x => fn y => x + y
+let add5 = make_adder 5
+let result1 = add5 10  // => 15
+let result2 = add5 20  // => 25
+
+// Recursive functions work with immutable values
+let sum_to_n = fix (fn self => fn n =>
+    if n == 0
+    then 0
+    else n + self (n - 1)
+)
+
+let total = sum_to_n 10  // => 55

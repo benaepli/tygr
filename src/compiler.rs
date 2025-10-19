@@ -3,7 +3,7 @@ use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference::{Inferrer, Typed};
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
-use crate::parser::parse_program;
+use crate::parser::{Expr, ExprKind, Span, parse_program};
 use crate::{lexer, parser};
 use anyhow::anyhow;
 
@@ -23,10 +23,14 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         None => return Err(anyhow!("no output generated")),
         Some(v) => v,
     };
-    let desugared = match desugar(output) {
-        Some(e) => e,
-        None => return Err(anyhow!("non-empty file expected")),
-    };
+    let desugared = desugar(output).unwrap_or_else(|| Expr {
+        kind: ExprKind::UnitLit,
+        span: Span {
+            context: (),
+            start: 0,
+            end: 0,
+        },
+    });
     let mut resolver = Resolver::new();
     let resolved = match resolver.resolve(desugared) {
         Err(e) => {

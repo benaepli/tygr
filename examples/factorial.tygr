@@ -4,4 +4,4 @@ let factorial = fix (fn self => fn n =>
     else n * self (n - 1)
 )
 
-let result = factorial 5
+let result = factorial 8
