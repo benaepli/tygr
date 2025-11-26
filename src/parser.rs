@@ -35,6 +35,26 @@ impl Pattern {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnnotationKind {
+    Var(String),
+    App(Box<Annotation>, Box<Annotation>),
+    Pair(Box<Annotation>, Box<Annotation>),
+    Lambda(Box<Annotation>, Box<Annotation>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotation {
+    pub kind: AnnotationKind,
+    pub span: Span,
+}
+
+impl Annotation {
+    fn new(kind: AnnotationKind, span: Span) -> Self {
+        Annotation { kind, span }
+    }
+}
+
 /// A program is a list of declarations with a name and an expression.
 /// In other words, a program contains declarations of the form `let name = value`.
 #[derive(Debug, Clone, PartialEq)]
@@ -153,20 +173,74 @@ where
     })
 }
 
+fn annotation<'a, I>() -> impl Parser<'a, I, Annotation, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    recursive(|annot| {
+        let simple = {
+            let atom = select! {
+                TokenKind::Identifier(s) => AnnotationKind::Var(s),
+            }
+            .map_with(|kind, e| Annotation::new(kind, e.span()));
+
+            let paren = just(TokenKind::LeftParen)
+                .ignore_then(annot.clone())
+                .then_ignore(just(TokenKind::RightParen));
+
+            choice((atom, paren))
+        };
+
+        let apply_parser = just(TokenKind::LeftBracket)
+            .ignore_then(annot.clone())
+            .then_ignore(just(TokenKind::RightBracket));
+
+        let apply = simple
+            .clone()
+            .foldl_with(apply_parser.repeated(), |arg1, arg2, extra| {
+                Annotation::new(
+                    AnnotationKind::App(Box::new(arg1), Box::new(arg2)),
+                    extra.span(),
+                )
+            });
+
+        let product = apply.clone().foldl_with(
+            just(TokenKind::Star).ignore_then(apply).repeated(),
+            |fst, snd, extra| {
+                Annotation::new(
+                    AnnotationKind::Pair(Box::new(fst), Box::new(snd)),
+                    extra.span(),
+                )
+            },
+        );
+
+        let arrow = product
+            .clone()
+            .separated_by(just(TokenKind::RightArrow))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|items| {
+                let mut iter = items.into_iter().rev();
+                let last = iter.next().unwrap();
+                iter.fold(last, |snd, fst| {
+                    let span = snd.span.union(fst.span);
+                    Annotation::new(
+                        AnnotationKind::App(Box::new(fst), Box::new(snd)),
+                        span
+                    )
+                })
+            });
+
+        arrow
+    })
+}
+
 fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     recursive(|expr| {
         let simple = {
-            // let atom = select! {
-            //     TokenKind::Integer(i) => ExprKind::IntLit(i),
-            //     TokenKind::Float(d) => ExprKind::FloatLit(d),
-            //     TokenKind::Boolean(b) => ExprKind::BoolLit(b),
-            //     TokenKind::String(s) => ExprKind::StringLit(s.clone()),
-            //     TokenKind::Identifier(s) => ExprKind::Var(s.clone()),
-            // }
-            // .map_with(|kind, e| Expr::new(kind, e.span()));
             let atom = choice((
                 select! {
                     TokenKind::Integer(i) => ExprKind::IntLit(i),

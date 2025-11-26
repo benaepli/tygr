@@ -501,7 +501,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 if result.is_err() {
                     continue;
                 }
-                return eval(&*branch.expr, &mut new_env)
+                return eval(&*branch.expr, &mut new_env);
             }
             Err(EvalError::NonExhaustiveMatch)
         }

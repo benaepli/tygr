@@ -58,6 +58,7 @@ pub enum TokenKind {
 
     Equal,
     Lambda,
+    RightArrow,
     EqualEqual,
     BangEqual,
     LessEqual,
@@ -112,6 +113,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Bang => write!(f, "!"),
             TokenKind::Equal => write!(f, "="),
             TokenKind::Lambda => write!(f, "\\"),
+            TokenKind::RightArrow => write!(f, "->"),
             TokenKind::Less => write!(f, "<"),
             TokenKind::Greater => write!(f, ">"),
 
@@ -377,7 +379,15 @@ impl<'a> Iterator for Lexer<'a> {
             '_' => Ok(TokenKind::Underscore),
 
             '+' => Ok(self.next_or('.', TokenKind::PlusDot, TokenKind::Plus)),
-            '-' => Ok(self.next_or('.', TokenKind::MinusDot, TokenKind::Minus)),
+            '-' => {
+                if self.match_next('>') {
+                    Ok(TokenKind::RightArrow)
+                } else if self.match_next('.') {
+                    Ok(TokenKind::MinusDot)
+                } else {
+                    Ok(TokenKind::Minus)
+                }
+            }
             '*' => Ok(self.next_or('.', TokenKind::StarDot, TokenKind::Star)),
 
             '/' if self.input.peek() == Some(&'/') => {
