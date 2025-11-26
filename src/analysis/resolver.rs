@@ -275,7 +275,7 @@ impl Resolver {
                 ))
             }
 
-            ExprKind::Let(pattern, value, body) => {
+            ExprKind::Let(pattern, value, body, annot) => {
                 let (resolved_value, free_in_value) = self.analyze(*value)?;
 
                 let mut new_scope = HashMap::new();
@@ -303,7 +303,7 @@ impl Resolver {
                 ))
             }
 
-            ExprKind::Lambda(param_pattern, body) => {
+            ExprKind::Lambda(param_pattern, body, annot) => {
                 let mut new_scope = HashMap::new();
                 let resolved = self.analyze_pattern(param_pattern, &mut new_scope)?;
 

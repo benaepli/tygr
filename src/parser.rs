@@ -61,6 +61,7 @@ impl Annotation {
 pub struct Declaration {
     pub pattern: Pattern,
     pub value: Expr,
+    pub annotation: Option<Annotation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,9 +86,9 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Var(String),
-    Lambda(Pattern, Box<Expr>),
+    Lambda(Pattern, Box<Expr>, Option<Annotation>), // Annotation is for the parameter type.
     App(Box<Expr>, Box<Expr>),
-    Let(Pattern, Box<Expr>, Box<Expr>),
+    Let(Pattern, Box<Expr>, Box<Expr>, Option<Annotation>),
     Fix(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<MatchBranch>),
@@ -224,10 +225,7 @@ where
                 let last = iter.next().unwrap();
                 iter.fold(last, |snd, fst| {
                     let span = snd.span.union(fst.span);
-                    Annotation::new(
-                        AnnotationKind::App(Box::new(fst), Box::new(snd)),
-                        span
-                    )
+                    Annotation::new(AnnotationKind::App(Box::new(fst), Box::new(snd)), span)
                 })
             });
 
@@ -240,6 +238,8 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     recursive(|expr| {
+        let annotation_with_colon = just(TokenKind::Colon).ignore_then(annotation());
+
         let simple = {
             let atom = choice((
                 select! {
@@ -414,12 +414,16 @@ where
 
         let let_expr = just(TokenKind::Let)
             .ignore_then(pattern())
+            .then(annotation_with_colon.clone().or_not())
             .then_ignore(just(TokenKind::Equal))
             .then(expr.clone())
             .then_ignore(just(TokenKind::In))
             .then(expr.clone())
-            .map_with(|((pat, e1), e2), e| {
-                Expr::new(ExprKind::Let(pat, Box::new(e1), Box::new(e2)), e.span())
+            .map_with(|(((pat, annot), e1), e2), e| {
+                Expr::new(
+                    ExprKind::Let(pat, Box::new(e1), Box::new(e2), annot),
+                    e.span(),
+                )
             });
 
         let if_expr = just(TokenKind::If)
@@ -437,10 +441,11 @@ where
 
         let lambda_expr = just(TokenKind::Fn)
             .ignore_then(pattern())
+            .then(annotation_with_colon.clone().or_not())
             .then_ignore(just(TokenKind::Lambda))
             .then(expr.clone())
-            .map_with(|(pat, e), extra| {
-                Expr::new(ExprKind::Lambda(pat, Box::new(e)), extra.span())
+            .map_with(|((pat, annot), e), extra| {
+                Expr::new(ExprKind::Lambda(pat, Box::new(e), annot), extra.span())
             });
 
         let match_branch = just(TokenKind::Pipe)
@@ -471,9 +476,10 @@ where
 {
     just(TokenKind::Let)
         .ignore_then(pattern())
+        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then_ignore(just(TokenKind::Equal))
         .then(expr())
-        .map(|(pattern, value)| Declaration { pattern, value })
+        .map(|((pattern, annotation), value)| Declaration { pattern, value, annotation })
 }
 
 pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>

@@ -35,6 +35,7 @@ pub enum TokenKind {
     RightBracket,
     Comma,
     Underscore,
+    Colon,
 
     Plus,
     Minus,
@@ -100,6 +101,7 @@ impl fmt::Display for TokenKind {
             TokenKind::RightBracket => write!(f, "]"),
             TokenKind::Comma => write!(f, ","),
             TokenKind::Underscore => write!(f, "_"),
+            TokenKind::Colon => write!(f, ":"),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),
             TokenKind::Star => write!(f, "*"),
@@ -397,13 +399,7 @@ impl<'a> Iterator for Lexer<'a> {
             '/' => Ok(self.next_or('.', TokenKind::SlashDot, TokenKind::Slash)),
 
             '^' => Ok(TokenKind::Caret),
-            ':' => {
-                if self.match_next(':') {
-                    Ok(TokenKind::Cons)
-                } else {
-                    Err(LexError::UnexpectedChar(start))
-                }
-            }
+            ':' => Ok(self.next_or(':', TokenKind::Cons, TokenKind::Colon)),
 
             '!' => {
                 if self.match_next('=') {
