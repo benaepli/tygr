@@ -136,8 +136,8 @@ impl fmt::Display for TokenKind {
             TokenKind::Integer(i) => write!(f, "{}", i),
             TokenKind::Boolean(b) => write!(f, "{}", b),
 
-            TokenKind::And => write!(f, "and"),
-            TokenKind::Or => write!(f, "or"),
+            TokenKind::And => write!(f, "&&"),
+            TokenKind::Or => write!(f, "||"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Then => write!(f, "then"),
             TokenKind::Else => write!(f, "else"),
@@ -162,8 +162,6 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "true" => TokenKind::Boolean(true),
     "false" => TokenKind::Boolean(false),
     "in" => TokenKind::In,
-    "and" => TokenKind::And,
-    "or" => TokenKind::Or,
     "match" => TokenKind::Match,
     "with" => TokenKind::With,
 };
@@ -190,6 +188,7 @@ fn is_special_char(ch: char) -> bool {
             | '{'
             | '}'
             | '|'
+            | '&'
     )
 }
 
@@ -443,7 +442,20 @@ impl<'a> Iterator for Lexer<'a> {
                 }
             }
 
-            '|' => Ok(TokenKind::Pipe),
+            '|' => {
+                if self.match_next('|') {
+                    Ok(TokenKind::Or)
+                } else {
+                    Ok(TokenKind::Pipe)
+                }
+            }
+            '&' => {
+                if self.match_next('&') {
+                    Ok(TokenKind::And)
+                } else {
+                    Err(LexError::UnexpectedChar(start))
+                }
+            }
 
             '"' => self.parse_string(start),
 

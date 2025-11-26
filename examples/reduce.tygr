@@ -1,0 +1,13 @@
+let fold_right = fix(fn self => fn f => fn ls => fn x => match ls with
+    | [] => x
+    | hd::tl => f hd (self f tl x))
+
+let result_r = fold_right (fn x => fn acc => x + acc) (3::5::[]) 0
+
+let fold_left = fix(fn self => fn f => fn acc => fn ls => match ls with
+    | [] => acc
+    | hd::tl => self f (f acc hd) tl)
+
+let result_l = fold_left (fn acc => fn x => acc + x) 0 (3::5::[])
+
+let correct = (result_l == result_r) && (result_l == 8)
