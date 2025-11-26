@@ -35,7 +35,7 @@ pub fn desugar(mut declarations: Vec<Declaration>) -> Option<Expr> {
     let final_expr = pattern_to_expr(&last.pattern);
 
     let mut result = Expr {
-        kind: ExprKind::Let(last.pattern, Box::new(last.value), Box::new(final_expr), last.annotation),
+        kind: ExprKind::Let(last.pattern, Box::new(last.value), Box::new(final_expr), last.generics, last.annotation),
         span: last_span,
     };
 
@@ -46,6 +46,7 @@ pub fn desugar(mut declarations: Vec<Declaration>) -> Option<Expr> {
                 declaration.pattern,
                 Box::new(declaration.value),
                 Box::new(result),
+                declaration.generics,
                 declaration.annotation,
             ),
             span: decl_span,

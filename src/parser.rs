@@ -55,12 +55,19 @@ impl Annotation {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Generic {
+    pub name: String,
+    pub span: Span,
+}
+
 /// A program is a list of declarations with a name and an expression.
 /// In other words, a program contains declarations of the form `let name = value`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Declaration {
     pub pattern: Pattern,
     pub value: Expr,
+    pub generics: Vec<Generic>,
     pub annotation: Option<Annotation>,
 }
 
@@ -88,7 +95,13 @@ pub enum ExprKind {
     Var(String),
     Lambda(Pattern, Box<Expr>, Option<Annotation>), // Annotation is for the parameter type.
     App(Box<Expr>, Box<Expr>),
-    Let(Pattern, Box<Expr>, Box<Expr>, Option<Annotation>),
+    Let(
+        Pattern,
+        Box<Expr>,
+        Box<Expr>,
+        Vec<Generic>,
+        Option<Annotation>,
+    ),
     Fix(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<MatchBranch>),
@@ -231,6 +244,26 @@ where
 
         arrow
     })
+}
+
+fn generics<'a, I>() -> impl Parser<'a, I, Vec<Generic>, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    just(TokenKind::LeftBracket)
+        .ignore_then(select! {
+            TokenKind::Identifier(s) => s
+        })
+        .then_ignore(just(TokenKind::RightBracket))
+        .map_with(|s, extra| Generic {
+            name: s,
+            span: extra.span(),
+        })
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .or_not()
+        .map(|generics| generics.unwrap_or_default())
 }
 
 fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
@@ -414,14 +447,15 @@ where
 
         let let_expr = just(TokenKind::Let)
             .ignore_then(pattern())
+            .then(generics())
             .then(annotation_with_colon.clone().or_not())
             .then_ignore(just(TokenKind::Equal))
             .then(expr.clone())
             .then_ignore(just(TokenKind::In))
             .then(expr.clone())
-            .map_with(|(((pat, annot), e1), e2), e| {
+            .map_with(|((((pat, generics), annot), e1), e2), e| {
                 Expr::new(
-                    ExprKind::Let(pat, Box::new(e1), Box::new(e2), annot),
+                    ExprKind::Let(pat, Box::new(e1), Box::new(e2), generics, annot),
                     e.span(),
                 )
             });
@@ -476,10 +510,16 @@ where
 {
     just(TokenKind::Let)
         .ignore_then(pattern())
+        .then(generics())
         .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then_ignore(just(TokenKind::Equal))
         .then(expr())
-        .map(|((pattern, annotation), value)| Declaration { pattern, value, annotation })
+        .map(|(((pattern, generics), annotation), value)| Declaration {
+            pattern,
+            value,
+            generics,
+            annotation,
+        })
 }
 
 pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>
