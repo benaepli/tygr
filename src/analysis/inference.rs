@@ -1,5 +1,5 @@
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedKind, ResolvedPattern, ResolvedPatternKind,
+    Name, Resolved, ResolvedKind, ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
 };
 use crate::builtin::{BuiltinFn, builtin_type};
 use crate::parser::{BinOp, Span};
@@ -74,6 +74,14 @@ pub enum TypedPatternKind {
 }
 
 #[derive(Debug, Clone)]
+pub struct TypedMatchPattern {
+    pub pattern: TypedPattern,
+    pub expr: Box<Typed>,
+    pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Typed {
     pub kind: TypedKind,
     pub ty: Rc<Type>,
@@ -96,6 +104,7 @@ pub enum TypedKind {
     },
     Fix(Box<Typed>),
     If(Box<Typed>, Box<Typed>, Box<Typed>),
+    Match(Box<Typed>, Vec<TypedMatchPattern>),
     Cons(Box<Typed>, Box<Typed>),
 
     UnitLit,
@@ -544,6 +553,45 @@ impl Inferrer {
                         Box::new(typed_alt),
                     ),
                     ty: result_ty,
+                    span,
+                })
+            }
+
+            ResolvedKind::Match(expr, branches) => {
+                let typed_expr = self.infer_type(env, *expr)?;
+
+                let ret_type = self.new_type();
+                let mut typed_branches = Vec::new();
+                for ResolvedMatchBranch {
+                    pattern,
+                    expr: body,
+                    span,
+                } in branches
+                {
+                    let mut new_env = env.clone();
+
+                    let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
+                    self.unify(&typed_expr.ty, &typed_pattern.ty, span)?;
+
+                    let typed_body = self.infer_type(&new_env, *body)?;
+                    let body_ty = self.apply_subst(&typed_body.ty);
+                    let param_ty_subst = self.apply_subst(&typed_pattern.ty);
+                    self.unify(&body_ty, &ret_type, span)?;
+
+                    // We treat a match branch's type as a function
+                    let fn_ty = Rc::new(Type::Function(param_ty_subst, body_ty));
+
+                    typed_branches.push(TypedMatchPattern {
+                        pattern: typed_pattern,
+                        expr: Box::new(typed_body),
+                        ty: fn_ty,
+                        span,
+                    })
+                }
+
+                Ok(Typed {
+                    kind: TypedKind::Match(Box::new(typed_expr), typed_branches),
+                    ty: ret_type,
                     span,
                 })
             }

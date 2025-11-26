@@ -44,6 +44,13 @@ pub struct Declaration {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MatchBranch {
+    pub pattern: Pattern,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
@@ -63,6 +70,7 @@ pub enum ExprKind {
     Let(Pattern, Box<Expr>, Box<Expr>),
     Fix(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    Match(Box<Expr>, Vec<MatchBranch>),
 
     UnitLit,
     PairLit(Box<Expr>, Box<Expr>),
@@ -361,7 +369,25 @@ where
                 Expr::new(ExprKind::Lambda(pat, Box::new(e)), extra.span())
             });
 
-        choice((let_expr, if_expr, lambda_expr, or))
+        let match_branch = just(TokenKind::Pipe)
+            .ignore_then(pattern())
+            .then_ignore(just(TokenKind::Lambda))
+            .then(expr.clone())
+            .map_with(|(pattern, expr), extra| MatchBranch {
+                pattern,
+                expr,
+                span: extra.span(),
+            });
+
+        let match_expr = just(TokenKind::Match)
+            .ignore_then(expr.clone())
+            .then_ignore(just(TokenKind::With))
+            .then(match_branch.repeated().at_least(1).collect::<Vec<_>>())
+            .map_with(|(expr, others), extra| {
+                Expr::new(ExprKind::Match(Box::new(expr), others), extra.span())
+            });
+
+        choice((let_expr, if_expr, lambda_expr, match_expr, or))
     })
 }
 

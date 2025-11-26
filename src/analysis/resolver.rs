@@ -36,6 +36,13 @@ impl ResolvedPattern {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMatchBranch {
+    pub pattern: ResolvedPattern,
+    pub expr: Box<Resolved>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Resolved {
     pub kind: ResolvedKind,
     pub span: Span,
@@ -63,6 +70,7 @@ pub enum ResolvedKind {
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
+    Match(Box<Resolved>, Vec<ResolvedMatchBranch>),
     Cons(Box<Resolved>, Box<Resolved>),
 
     UnitLit,
@@ -154,7 +162,9 @@ impl Resolver {
                 let kind = ResolvedPatternKind::Cons(Box::new(resolved_p1), Box::new(resolved_p2));
                 Ok(ResolvedPattern::new(kind, span))
             }
-            PatternKind::EmptyList => Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span)),
+            PatternKind::EmptyList => {
+                Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span))
+            }
         }
     }
 
@@ -317,7 +327,7 @@ impl Resolver {
                     free_in_body,
                 ))
             }
-            
+
             ExprKind::Cons(first, second) => {
                 let (resolved_first, free_first) = self.analyze(*first)?;
                 let (resolved_second, free_second) = self.analyze(*second)?;
@@ -330,7 +340,45 @@ impl Resolver {
                     all_free,
                 ))
             }
-            ExprKind::EmptyListLit => Ok((Resolved::new(ResolvedKind::EmptyListLit, span), HashSet::new())),
+            ExprKind::EmptyListLit => Ok((
+                Resolved::new(ResolvedKind::EmptyListLit, span),
+                HashSet::new(),
+            )),
+            ExprKind::Match(expr, branches) => {
+                let (resolved_expr, free_expr) = self.analyze(*expr)?;
+
+                let mut all_free = free_expr;
+                let mut resolved_branches = Vec::new();
+
+                for branch in branches {
+                    let mut new_scope = HashMap::new();
+                    let resolved_pattern = self.analyze_pattern(branch.pattern, &mut new_scope)?;
+
+                    self.scopes.push(new_scope.clone());
+                    let (resolved_body, mut free_in_body) = self.analyze(branch.expr)?;
+                    self.scopes.pop();
+
+                    for name_id in new_scope.values() {
+                        free_in_body.remove(name_id);
+                    }
+
+                    all_free = all_free.union(&free_in_body).cloned().collect();
+
+                    resolved_branches.push(ResolvedMatchBranch {
+                        pattern: resolved_pattern,
+                        expr: Box::new(resolved_body),
+                        span: branch.span,
+                    });
+                }
+
+                Ok((
+                    Resolved::new(
+                        ResolvedKind::Match(Box::new(resolved_expr), resolved_branches),
+                        span,
+                    ),
+                    all_free,
+                ))
+            }
         }
     }
 }

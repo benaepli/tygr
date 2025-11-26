@@ -92,6 +92,7 @@ pub enum EvalError {
     PatternMismatch(String),
     TypeMismatch(String),
     NotAFunction,
+    NonExhaustiveMatch,
 }
 
 impl fmt::Display for EvalError {
@@ -101,6 +102,7 @@ impl fmt::Display for EvalError {
             EvalError::PatternMismatch(msg) => write!(f, "Pattern match failed: {}", msg),
             EvalError::TypeMismatch(msg) => write!(f, "Type mismatch: {}", msg),
             EvalError::NotAFunction => write!(f, "Attempted to call a non-function value"),
+            EvalError::NonExhaustiveMatch => write!(f, "Non-exhaustive match"),
         }
     }
 }
@@ -179,25 +181,24 @@ fn bind_pattern(
             }
         }
         TypedPatternKind::Cons(p1, p2) => {
-           if let Value::List(v) = &*value {
+            if let Value::List(v) = &*value {
                 if !v.is_empty() {
                     bind_pattern(p1, v[0].clone(), env)?;
-                    
+
                     let remainder = v[1..].to_vec();
                     bind_pattern(p2, Rc::new(Value::List(remainder)), env)
-                }  
-                else {
+                } else {
                     Err(EvalError::PatternMismatch(format!(
                         "got empty list {}",
                         value
                     )))
                 }
-           } else {
-               Err(EvalError::PatternMismatch(format!(
-                   "expected list, found {}",
-                   value
-               )))
-           }
+            } else {
+                Err(EvalError::PatternMismatch(format!(
+                    "expected list, found {}",
+                    value
+                )))
+            }
         }
     }
 }
@@ -492,6 +493,18 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 )),
             }
         }
+        TypedKind::Match(expr, branches) => {
+            let val = eval(expr, env)?;
+            let mut new_env = env.clone();
+            for branch in branches {
+                let result = bind_pattern(&branch.pattern, val.clone(), &mut new_env);
+                if result.is_err() {
+                    continue;
+                }
+                return eval(&*branch.expr, &mut new_env)
+            }
+            Err(EvalError::NonExhaustiveMatch)
+        }
         TypedKind::App(func_expr, arg_expr) => {
             let func_val = eval(func_expr, env)?;
             let arg_val = eval(arg_expr, env)?;
@@ -521,7 +534,9 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                     new_list.push(v1);
                     Ok(Rc::new(Value::List(new_list)))
                 }
-                _ => Err(EvalError::TypeMismatch("Cons second argument must be a list".into())),
+                _ => Err(EvalError::TypeMismatch(
+                    "Cons second argument must be a list".into(),
+                )),
             }
         }
     }

@@ -85,6 +85,9 @@ pub enum TokenKind {
     Let,
     In,
     Fix,
+    Match,
+    With,
+    Pipe,
 }
 
 impl fmt::Display for TokenKind {
@@ -142,6 +145,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Let => write!(f, "let"),
             TokenKind::In => write!(f, "in"),
             TokenKind::Fix => write!(f, "fix"),
+            TokenKind::Match => write!(f, "match"),
+            TokenKind::With => write!(f, "with"),
+            TokenKind::Pipe => write!(f, "|"),
         }
     }
 }
@@ -158,6 +164,8 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "in" => TokenKind::In,
     "and" => TokenKind::And,
     "or" => TokenKind::Or,
+    "match" => TokenKind::Match,
+    "with" => TokenKind::With,
 };
 
 fn is_special_char(ch: char) -> bool {
@@ -181,6 +189,7 @@ fn is_special_char(ch: char) -> bool {
             | ']'
             | '{'
             | '}'
+            | '|'
     )
 }
 
@@ -433,6 +442,8 @@ impl<'a> Iterator for Lexer<'a> {
                     Ok(TokenKind::Less)
                 }
             }
+
+            '|' => Ok(TokenKind::Pipe),
 
             '"' => self.parse_string(start),
 
