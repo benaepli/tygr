@@ -19,6 +19,8 @@ pub enum ResolvedPatternKind {
     Unit,
     Pair(Box<ResolvedPattern>, Box<ResolvedPattern>),
     Wildcard,
+    Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
+    EmptyList,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +63,7 @@ pub enum ResolvedKind {
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
+    Cons(Box<Resolved>, Box<Resolved>),
 
     UnitLit,
     PairLit(Box<Resolved>, Box<Resolved>),
@@ -68,6 +71,7 @@ pub enum ResolvedKind {
     FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
+    EmptyListLit,
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
 
@@ -143,6 +147,14 @@ impl Resolver {
             }
             PatternKind::Unit => Ok(ResolvedPattern::new(ResolvedPatternKind::Unit, span)),
             PatternKind::Wildcard => Ok(ResolvedPattern::new(ResolvedPatternKind::Wildcard, span)),
+            PatternKind::Cons(p1, p2) => {
+                let resolved_p1 = self.analyze_pattern(*p1, scope)?;
+                let resolved_p2 = self.analyze_pattern(*p2, scope)?;
+
+                let kind = ResolvedPatternKind::Cons(Box::new(resolved_p1), Box::new(resolved_p2));
+                Ok(ResolvedPattern::new(kind, span))
+            }
+            PatternKind::EmptyList => Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span)),
         }
     }
 
@@ -195,7 +207,6 @@ impl Resolver {
                     all_free,
                 ))
             }
-
 
             ExprKind::BinOp(op, a, b) => {
                 let (resolved_a, free_a) = self.analyze(*a)?;
@@ -306,6 +317,20 @@ impl Resolver {
                     free_in_body,
                 ))
             }
+            
+            ExprKind::Cons(first, second) => {
+                let (resolved_first, free_first) = self.analyze(*first)?;
+                let (resolved_second, free_second) = self.analyze(*second)?;
+                let all_free = free_first.union(&free_second).cloned().collect();
+                Ok((
+                    Resolved::new(
+                        ResolvedKind::Cons(Box::new(resolved_first), Box::new(resolved_second)),
+                        span,
+                    ),
+                    all_free,
+                ))
+            }
+            ExprKind::EmptyListLit => Ok((Resolved::new(ResolvedKind::EmptyListLit, span), HashSet::new())),
         }
     }
 }

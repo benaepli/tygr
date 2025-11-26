@@ -13,6 +13,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(Rc<String>),
+    List(Vec<Rc<Value>>),
     Pair(Rc<Value>, Rc<Value>),
     /// A standard first-class function, capturing its environment upon creation.
     Closure {
@@ -43,6 +44,7 @@ impl fmt::Debug for Value {
             Value::Float(fl) => write!(f, "{}", fl),
             Value::Bool(b) => write!(f, "{}", b),
             Value::String(s) => write!(f, "\"{}\"", s),
+            Value::List(v) => f.debug_list().entries(v.iter()).finish(),
             Value::Pair(a, b) => f.debug_tuple("Pair").field(a).field(b).finish(),
             Value::Closure { .. } => write!(f, "<closure>"),
             Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
@@ -64,6 +66,16 @@ impl fmt::Display for Value {
             Value::Float(fl) => write!(f, "{}", fl),
             Value::Bool(b) => write!(f, "{}", b),
             Value::String(s) => write!(f, "{}", s),
+            Value::List(v) => {
+                f.write_str("[")?;
+                for (i, val) in v.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", val)?;
+                }
+                f.write_str("]")
+            }
             Value::Pair(a, b) => write!(f, "({}, {})", a, b),
             Value::Closure { .. } => write!(f, "<closure>"),
             Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
@@ -148,6 +160,44 @@ fn bind_pattern(
                     value
                 )))
             }
+        }
+        TypedPatternKind::EmptyList => {
+            if let Value::List(v) = &*value {
+                if v.is_empty() {
+                    Ok(())
+                } else {
+                    Err(EvalError::PatternMismatch(format!(
+                        "expected empty list, found {}",
+                        value
+                    )))
+                }
+            } else {
+                Err(EvalError::PatternMismatch(format!(
+                    "expected list, found {}",
+                    value
+                )))
+            }
+        }
+        TypedPatternKind::Cons(p1, p2) => {
+           if let Value::List(v) = &*value {
+                if !v.is_empty() {
+                    bind_pattern(p1, v[0].clone(), env)?;
+                    
+                    let remainder = v[1..].to_vec();
+                    bind_pattern(p2, Rc::new(Value::List(remainder)), env)
+                }  
+                else {
+                    Err(EvalError::PatternMismatch(format!(
+                        "got empty list {}",
+                        value
+                    )))
+                }
+           } else {
+               Err(EvalError::PatternMismatch(format!(
+                   "expected list, found {}",
+                   value
+               )))
+           }
         }
     }
 }
@@ -461,6 +511,19 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             eval_binop(op.clone(), left, right)
         }
         TypedKind::Builtin(b) => Ok(Rc::new(Value::Builtin(b.clone()))),
+        TypedKind::EmptyListLit => Ok(Rc::new(Value::List(vec![]))),
+        TypedKind::Cons(e1, e2) => {
+            let v1 = eval(e1, env)?;
+            let v2 = eval(e2, env)?;
+            match &*v2 {
+                Value::List(list) => {
+                    let mut new_list = list.clone();
+                    new_list.push(v1);
+                    Ok(Rc::new(Value::List(new_list)))
+                }
+                _ => Err(EvalError::TypeMismatch("Cons second argument must be a list".into())),
+            }
+        }
     }
 }
 

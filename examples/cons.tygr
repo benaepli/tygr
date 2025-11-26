@@ -1,0 +1,5 @@
+let x = []
+let y = 5::x
+let z = 7::y
+let (a::b) = z
+let p = 5::b

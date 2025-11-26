@@ -15,6 +15,12 @@ fn pattern_to_expr(pattern: &Pattern) -> Expr {
             let e2 = Box::new(pattern_to_expr(p2));
             ExprKind::PairLit(e1, e2)
         }
+        PatternKind::Cons(p1, p2) => {
+            let e1 = Box::new(pattern_to_expr(p1));
+            let e2 = Box::new(pattern_to_expr(p2));
+            ExprKind::Cons(e1, e2)
+        }
+        PatternKind::EmptyList => ExprKind::EmptyListLit,
     };
     Expr {
         kind,

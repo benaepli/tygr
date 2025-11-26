@@ -19,6 +19,8 @@ pub enum PatternKind {
     Unit,
     Pair(Box<Pattern>, Box<Pattern>),
     Wildcard,
+    Cons(Box<Pattern>, Box<Pattern>),
+    EmptyList,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,8 +70,10 @@ pub enum ExprKind {
     FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
+    EmptyListLit,
 
     BinOp(BinOp, Box<Expr>, Box<Expr>),
+    Cons(Box<Expr>, Box<Expr>),
 }
 
 fn build_bin_op<'a, I, OP, P>(
@@ -100,6 +104,9 @@ where
         let atom = choice((
             select! { TokenKind::Identifier(s) => PatternKind::Var(s.clone()) },
             just(TokenKind::Underscore).to(PatternKind::Wildcard),
+            just(TokenKind::LeftBracket)
+                .then(just(TokenKind::RightBracket))
+                .to(PatternKind::EmptyList),
         ))
         .map_with(|kind, e| Pattern::new(kind, e.span()));
 
@@ -121,7 +128,20 @@ where
                 }
             });
 
-        choice((atom, tuple_pat))
+        let base = choice((atom, tuple_pat));
+
+        let cons_pat = base
+            .clone()
+            .then(just(TokenKind::Cons).ignore_then(pat).or_not())
+            .map_with(|(head, tail_opt), _| match tail_opt {
+                Some(tail) => {
+                    let span = head.span.union(tail.span);
+                    Pattern::new(PatternKind::Cons(Box::new(head), Box::new(tail)), span)
+                }
+                None => head,
+            });
+
+        cons_pat
     })
 }
 
@@ -131,13 +151,26 @@ where
 {
     recursive(|expr| {
         let simple = {
-            let atom = select! {
-                TokenKind::Integer(i) => ExprKind::IntLit(i),
-                TokenKind::Float(d) => ExprKind::FloatLit(d),
-                TokenKind::Boolean(b) => ExprKind::BoolLit(b),
-                TokenKind::String(s) => ExprKind::StringLit(s.clone()),
-                TokenKind::Identifier(s) => ExprKind::Var(s.clone()),
-            }
+            // let atom = select! {
+            //     TokenKind::Integer(i) => ExprKind::IntLit(i),
+            //     TokenKind::Float(d) => ExprKind::FloatLit(d),
+            //     TokenKind::Boolean(b) => ExprKind::BoolLit(b),
+            //     TokenKind::String(s) => ExprKind::StringLit(s.clone()),
+            //     TokenKind::Identifier(s) => ExprKind::Var(s.clone()),
+            // }
+            // .map_with(|kind, e| Expr::new(kind, e.span()));
+            let atom = choice((
+                select! {
+                    TokenKind::Integer(i) => ExprKind::IntLit(i),
+                    TokenKind::Float(d) => ExprKind::FloatLit(d),
+                    TokenKind::Boolean(b) => ExprKind::BoolLit(b),
+                    TokenKind::String(s) => ExprKind::StringLit(s.clone()),
+                    TokenKind::Identifier(s) => ExprKind::Var(s.clone()),
+                },
+                just(TokenKind::LeftBracket)
+                    .then(just(TokenKind::RightBracket))
+                    .to(ExprKind::EmptyListLit),
+            ))
             .map_with(|kind, e| Expr::new(kind, e.span()));
 
             let items = expr
@@ -229,7 +262,21 @@ where
             build_bin_op(op, term)
         };
 
-        let compare = concat
+        let cons = concat
+            .clone()
+            .separated_by(just(TokenKind::Cons))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|items| {
+                let mut iter = items.into_iter().rev();
+                let last = iter.next().unwrap();
+                iter.fold(last, |tail, head| {
+                    let span = head.span.union(tail.span);
+                    Expr::new(ExprKind::Cons(Box::new(head), Box::new(tail)), span)
+                })
+            });
+
+        let compare = cons
             .clone()
             .then(
                 choice((
@@ -248,7 +295,7 @@ where
                     just(TokenKind::EqualEqualB).to("==b".to_string()),
                     just(TokenKind::BangEqualB).to("!=b".to_string()),
                 ))
-                .then(concat)
+                .then(cons)
                 .or_not(),
             )
             .map(|(left, op_right_opt)| match op_right_opt {

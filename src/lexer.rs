@@ -31,6 +31,8 @@ impl fmt::Display for Token {
 pub enum TokenKind {
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
     Comma,
     Underscore,
 
@@ -39,6 +41,7 @@ pub enum TokenKind {
     Star,
     Slash,
     Caret,
+    Cons,
 
     PlusDot,
     MinusDot,
@@ -89,6 +92,8 @@ impl fmt::Display for TokenKind {
         match self {
             TokenKind::LeftParen => write!(f, "("),
             TokenKind::RightParen => write!(f, ")"),
+            TokenKind::LeftBracket => write!(f, "["),
+            TokenKind::RightBracket => write!(f, "]"),
             TokenKind::Comma => write!(f, ","),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Plus => write!(f, "+"),
@@ -96,6 +101,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Star => write!(f, "*"),
             TokenKind::Slash => write!(f, "/"),
             TokenKind::Caret => write!(f, "^"),
+            TokenKind::Cons => write!(f, "::"),
             TokenKind::PlusDot => write!(f, "+."),
             TokenKind::MinusDot => write!(f, "-."),
             TokenKind::StarDot => write!(f, "*."),
@@ -157,7 +163,24 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
 fn is_special_char(ch: char) -> bool {
     matches!(
         ch,
-        '(' | ')' | ',' | '+' | '-' | '*' | '/' | '^' | '!' | '>' | '<' | '=' | '"' | '~'
+        '(' | ')'
+            | ','
+            | '+'
+            | '-'
+            | '*'
+            | '/'
+            | '^'
+            | '!'
+            | '>'
+            | '<'
+            | '='
+            | '"'
+            | '~'
+            | ':'
+            | '['
+            | ']'
+            | '{'
+            | '}'
     )
 }
 
@@ -340,6 +363,8 @@ impl<'a> Iterator for Lexer<'a> {
         let result = match ch {
             '(' => Ok(TokenKind::LeftParen),
             ')' => Ok(TokenKind::RightParen),
+            '[' => Ok(TokenKind::LeftBracket),
+            ']' => Ok(TokenKind::RightBracket),
             ',' => Ok(TokenKind::Comma),
             '_' => Ok(TokenKind::Underscore),
 
@@ -354,6 +379,13 @@ impl<'a> Iterator for Lexer<'a> {
             '/' => Ok(self.next_or('.', TokenKind::SlashDot, TokenKind::Slash)),
 
             '^' => Ok(TokenKind::Caret),
+            ':' => {
+                if self.match_next(':') {
+                    Ok(TokenKind::Cons)
+                } else {
+                    Err(LexError::UnexpectedChar(start))
+                }
+            }
 
             '!' => {
                 if self.match_next('=') {

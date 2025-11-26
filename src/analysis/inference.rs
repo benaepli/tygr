@@ -34,6 +34,7 @@ pub enum Type {
     Var(TypeID),
     Pair(Rc<Type>, Rc<Type>),
     Function(Rc<Type>, Rc<Type>),
+    List(Rc<Type>),
 }
 
 impl fmt::Display for Type {
@@ -50,6 +51,7 @@ impl fmt::Display for Type {
                 Type::Function(_, _) => write!(f, "({}) -> {}", arg, ret),
                 _ => write!(f, "{} -> {}", arg, ret),
             },
+            Type::List(ty) => write!(f, "list[{}]", ty),
         }
     }
 }
@@ -67,6 +69,8 @@ pub enum TypedPatternKind {
     Unit,
     Pair(Box<TypedPattern>, Box<TypedPattern>),
     Wildcard,
+    Cons(Box<TypedPattern>, Box<TypedPattern>),
+    EmptyList,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +96,7 @@ pub enum TypedKind {
     },
     Fix(Box<Typed>),
     If(Box<Typed>, Box<Typed>, Box<Typed>),
+    Cons(Box<Typed>, Box<Typed>),
 
     UnitLit,
     PairLit(Box<Typed>, Box<Typed>),
@@ -99,6 +104,7 @@ pub enum TypedKind {
     FloatLit(f64),
     BoolLit(bool),
     StringLit(String),
+    EmptyListLit,
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
 
@@ -245,6 +251,12 @@ impl Inferrer {
                 self.unify(ret1, ret2, span)?;
                 Ok(())
             }
+
+            (Type::List(a1), Type::List(a2)) => {
+                self.unify(a1, a2, span)?;
+                Ok(())
+            }
+
             _ => Err(TypeError::Mismatch(t1.clone(), t2.clone(), span)),
         }
     }
@@ -342,6 +354,27 @@ impl Inferrer {
                     span,
                 })
             }
+            ResolvedPatternKind::Cons(p1, p2) => {
+                let typed_p1 = self.infer_pattern(*p1, new_env)?;
+                let typed_p2 = self.infer_pattern(*p2, new_env)?;
+
+                let elem_ty = self.new_type();
+                let list_ty = Rc::new(Type::List(elem_ty.clone()));
+
+                self.unify(&typed_p1.ty, &elem_ty, typed_p1.span)?;
+                self.unify(&typed_p2.ty, &list_ty, typed_p2.span)?;
+
+                Ok(TypedPattern {
+                    kind: TypedPatternKind::Cons(Box::new(typed_p1), Box::new(typed_p2)),
+                    ty: list_ty,
+                    span,
+                })
+            }
+            ResolvedPatternKind::EmptyList => Ok(TypedPattern {
+                kind: TypedPatternKind::EmptyList,
+                ty: Rc::new(Type::List(self.new_type())),
+                span,
+            }),
         }
     }
 
@@ -511,6 +544,32 @@ impl Inferrer {
                         Box::new(typed_alt),
                     ),
                     ty: result_ty,
+                    span,
+                })
+            }
+
+            ResolvedKind::Cons(first, second) => {
+                let typed_first = self.infer_type(env, *first)?;
+                let typed_second = self.infer_type(env, *second)?;
+
+                let elem_ty = self.new_type();
+                let list_ty = Rc::new(Type::List(elem_ty.clone()));
+
+                self.unify(&typed_first.ty, &elem_ty, typed_first.span)?;
+                self.unify(&typed_second.ty, &list_ty, typed_second.span)?;
+
+                Ok(Typed {
+                    kind: TypedKind::Cons(Box::new(typed_first), Box::new(typed_second)),
+                    ty: list_ty,
+                    span,
+                })
+            }
+
+            ResolvedKind::EmptyListLit => {
+                let list_ty = Rc::new(Type::List(self.new_type()));
+                Ok(Typed {
+                    kind: TypedKind::EmptyListLit,
+                    ty: list_ty,
                     span,
                 })
             }
