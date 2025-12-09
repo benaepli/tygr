@@ -123,6 +123,8 @@ type TypeContext = HashMap<DefID, Rc<Type>>;
 pub struct Inferrer {
     substitution: Substitution,
     next_var: TypeID,
+
+    type_ctx: TypeContext,
 }
 
 #[derive(Debug, Error)]
@@ -142,6 +144,8 @@ impl Inferrer {
         Self {
             substitution: HashMap::new(),
             next_var: TypeID(0),
+
+            type_ctx: HashMap::new(),
         }
     }
 
@@ -151,32 +155,28 @@ impl Inferrer {
         Rc::new(Type::Var(TypeID(id)))
     }
 
-    fn instantiate_annotation(
-        &mut self,
-        annot: &ResolvedAnnotation,
-        ctx: &TypeContext,
-    ) -> Rc<Type> {
+    fn instantiate_annotation(&mut self, annot: &ResolvedAnnotation) -> Rc<Type> {
         match &annot.kind {
             ResolvedAnnotationKind::Var(name_id) => {
-                if let Some(ty) = ctx.get(name_id) {
+                if let Some(ty) = self.type_ctx.get(name_id) {
                     ty.clone()
                 } else {
                     Rc::new(Type::Star(*name_id))
                 }
             }
             ResolvedAnnotationKind::App(lhs, rhs) => {
-                let t_lhs = self.instantiate_annotation(lhs, ctx);
-                let t_rhs = self.instantiate_annotation(rhs, ctx);
+                let t_lhs = self.instantiate_annotation(lhs);
+                let t_rhs = self.instantiate_annotation(rhs);
                 Rc::new(Type::App(t_lhs, t_rhs))
             }
             ResolvedAnnotationKind::Pair(lhs, rhs) => {
-                let t_lhs = self.instantiate_annotation(lhs, ctx);
-                let t_rhs = self.instantiate_annotation(rhs, ctx);
+                let t_lhs = self.instantiate_annotation(lhs);
+                let t_rhs = self.instantiate_annotation(rhs);
                 Rc::new(Type::Pair(t_lhs, t_rhs))
             }
             ResolvedAnnotationKind::Lambda(param, ret) => {
-                let t_param = self.instantiate_annotation(param, ctx);
-                let t_ret = self.instantiate_annotation(ret, ctx);
+                let t_param = self.instantiate_annotation(param);
+                let t_ret = self.instantiate_annotation(ret);
                 Rc::new(Type::Function(t_param, t_ret))
             }
         }
@@ -465,6 +465,10 @@ impl Inferrer {
             } => {
                 let mut new_env = env.clone();
                 let typed_param = self.infer_pattern(param, &mut new_env)?;
+                if let Some(annot) = param_type {
+                    let expected_ty = self.instantiate_annotation(&annot);
+                    self.unify(&typed_param.ty, &expected_ty, typed_param.span)?;
+                }
 
                 let typed_body = self.infer_type(&new_env, *body)?;
                 let body_ty = self.apply_subst(&typed_body.ty);
@@ -508,7 +512,15 @@ impl Inferrer {
                 value_type,
                 type_params,
             } => {
+                for param_id in type_params {
+                    self.type_ctx
+                        .insert(param_id, Rc::new(Type::Star(param_id)));
+                }
                 let typed_value = self.infer_type(env, *value)?;
+                if let Some(annot) = value_type {
+                    let expected_ty = self.instantiate_annotation(&annot);
+                    self.unify(&expected_ty, &typed_value.ty, typed_value.span)?;
+                }
                 let value_ty = self.apply_subst(&typed_value.ty);
 
                 let mut new_env = Environment::new();

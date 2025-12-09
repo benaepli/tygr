@@ -238,7 +238,7 @@ where
                 let last = iter.next().unwrap();
                 iter.fold(last, |snd, fst| {
                     let span = snd.span.union(fst.span);
-                    Annotation::new(AnnotationKind::App(Box::new(fst), Box::new(snd)), span)
+                    Annotation::new(AnnotationKind::Lambda(Box::new(fst), Box::new(snd)), span)
                 })
             });
 
