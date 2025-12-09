@@ -90,6 +90,7 @@ pub enum TokenKind {
     Match,
     With,
     Pipe,
+    Type,
 }
 
 impl fmt::Display for TokenKind {
@@ -152,6 +153,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Match => write!(f, "match"),
             TokenKind::With => write!(f, "with"),
             TokenKind::Pipe => write!(f, "|"),
+            TokenKind::Type => write!(f, "type"),
         }
     }
 }
@@ -168,6 +170,7 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "in" => TokenKind::In,
     "match" => TokenKind::Match,
     "with" => TokenKind::With,
+    "type" => TokenKind::Type,
 };
 
 fn is_special_char(ch: char) -> bool {

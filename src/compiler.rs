@@ -3,9 +3,23 @@ use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference::{Inferrer, Typed};
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
-use crate::parser::{Expr, ExprKind, Span, parse_program};
+use crate::parser::{Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, parse_program};
 use crate::{lexer, parser};
 use anyhow::anyhow;
+
+fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<TypeAlias>) {
+    let mut let_decls = Vec::new();
+    let mut type_aliases = Vec::new();
+
+    for decl in decls {
+        match decl {
+            Declaration::Let(l) => let_decls.push(l),
+            Declaration::Type(t) => type_aliases.push(t),
+        }
+    }
+
+    (let_decls, type_aliases)
+}
 
 pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
     let mut lexer = Lexer::new(input);
@@ -23,7 +37,9 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         None => return Err(anyhow!("no output generated")),
         Some(v) => v,
     };
-    let desugared = desugar(output).unwrap_or_else(|| Expr {
+
+    let (declarations, aliases) = split_declarations(output);
+    let desugared = desugar(declarations).unwrap_or_else(|| Expr {
         kind: ExprKind::UnitLit,
         span: Span {
             context: (),

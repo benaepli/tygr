@@ -61,14 +61,27 @@ pub struct Generic {
     pub span: Span,
 }
 
-/// A program is a list of declarations with a name and an expression.
-/// In other words, a program contains declarations of the form `let name = value`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Declaration {
+pub struct TypeAlias {
+    pub name: String,
+    pub generics: Vec<Generic>,
+    pub body: Annotation,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LetDeclaration {
     pub pattern: Pattern,
     pub value: Expr,
     pub generics: Vec<Generic>,
     pub annotation: Option<Annotation>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Declaration {
+    Let(LetDeclaration),
+    Type(TypeAlias),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -504,7 +517,24 @@ where
     })
 }
 
-fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
+fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind>>>
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    just(TokenKind::Type)
+        .ignore_then(select! { TokenKind::Identifier(s) => s })
+        .then(generics())
+        .then_ignore(just(TokenKind::Equal))
+        .then(annotation())
+        .map_with(|((name, generics), body), extra| TypeAlias {
+            name,
+            generics,
+            body,
+            span: extra.span(),
+        })
+}
+
+fn let_declaration<'a, I>() -> impl Parser<'a, I, LetDeclaration, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
@@ -514,12 +544,25 @@ where
         .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then_ignore(just(TokenKind::Equal))
         .then(expr())
-        .map(|(((pattern, generics), annotation), value)| Declaration {
-            pattern,
-            value,
-            generics,
-            annotation,
-        })
+        .map_with(
+            |(((pattern, generics), annotation), value), extra| LetDeclaration {
+                pattern,
+                value,
+                generics,
+                annotation,
+                span: extra.span(),
+            },
+        )
+}
+
+fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    choice((
+        type_alias().map(|t| Declaration::Type(t)),
+        let_declaration().map(|l| Declaration::Let(l)),
+    ))
 }
 
 pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>

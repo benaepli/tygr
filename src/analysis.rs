@@ -2,7 +2,7 @@ pub mod format;
 pub mod inference;
 pub mod resolver;
 
-use crate::parser::{Declaration, Expr, ExprKind, Pattern, PatternKind};
+use crate::parser::{Declaration, Expr, ExprKind, LetDeclaration, Pattern, PatternKind};
 use chumsky::span::Span;
 
 fn pattern_to_expr(pattern: &Pattern) -> Expr {
@@ -28,7 +28,7 @@ fn pattern_to_expr(pattern: &Pattern) -> Expr {
     }
 }
 
-pub fn desugar(mut declarations: Vec<Declaration>) -> Option<Expr> {
+pub fn desugar(mut declarations: Vec<LetDeclaration>) -> Option<Expr> {
     let last = declarations.pop()?;
     let last_span = last.pattern.span.union(last.value.span);
 
