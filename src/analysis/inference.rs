@@ -1,13 +1,23 @@
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedKind, ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, TypeID,
+    DefID, Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
+    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
 };
-use crate::builtin::BuiltinFn;
+use crate::builtin::{BuiltinFn, BOOL_TYPE, FLOAT_TYPE, INT_TYPE, STRING_TYPE, UNIT_TYPE};
 use crate::parser::{BinOp, Span};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeID(pub usize);
+
+impl fmt::Display for TypeID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TypeScheme {
@@ -17,32 +27,25 @@ pub struct TypeScheme {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
-    Unit,
-    Int,
-    Float,
-    Bool,
-    String,
     Var(TypeID),
-    Pair(Rc<Type>, Rc<Type>),
+    Con(DefID),
+    App(Rc<Type>, Rc<Type>),
+
     Function(Rc<Type>, Rc<Type>),
-    List(Rc<Type>),
+    Pair(Rc<Type>, Rc<Type>),
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Unit => write!(f, "unit"),
-            Type::Int => write!(f, "int"),
-            Type::Float => write!(f, "float"),
-            Type::Bool => write!(f, "bool"),
-            Type::String => write!(f, "string"),
-            Type::Var(id) => write!(f, "'{}", id),
+            Type::Var(id) => write!(f, "{}", id),
+            Type::Con(id) => write!(f, "@{}", id.0),
+            Type::App(lhs, rhs) => write!(f, "{}[{}]", lhs, rhs),
             Type::Pair(a, b) => write!(f, "({} * {})", a, b),
             Type::Function(arg, ret) => match arg.as_ref() {
                 Type::Function(_, _) => write!(f, "({}) -> {}", arg, ret),
                 _ => write!(f, "{} -> {}", arg, ret),
             },
-            Type::List(ty) => write!(f, "list[{}]", ty),
         }
     }
 }
@@ -113,6 +116,7 @@ pub enum TypedKind {
 
 type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
+type TypeContext = HashMap<DefID, Rc<Type>>;
 
 pub struct Inferrer {
     substitution: Substitution,
@@ -143,6 +147,37 @@ impl Inferrer {
         let id = self.next_var.0;
         self.next_var.0 += 1;
         Rc::new(Type::Var(TypeID(id)))
+    }
+
+    fn instantiate_annotation(
+        &mut self,
+        annot: &ResolvedAnnotation,
+        ctx: &TypeContext,
+    ) -> Rc<Type> {
+        match &annot.kind {
+            ResolvedAnnotationKind::Var(name_id) => {
+                if let Some(ty) = ctx.get(name_id) {
+                    ty.clone()
+                } else {
+                    Rc::new(Type::Con(*name_id))
+                }
+            }
+            ResolvedAnnotationKind::App(lhs, rhs) => {
+                let t_lhs = self.instantiate_annotation(lhs, ctx);
+                let t_rhs = self.instantiate_annotation(rhs, ctx);
+                Rc::new(Type::App(t_lhs, t_rhs))
+            }
+            ResolvedAnnotationKind::Pair(lhs, rhs) => {
+                let t_lhs = self.instantiate_annotation(lhs, ctx);
+                let t_rhs = self.instantiate_annotation(rhs, ctx);
+                Rc::new(Type::Pair(t_lhs, t_rhs))
+            }
+            ResolvedAnnotationKind::Lambda(param, ret) => {
+                let t_param = self.instantiate_annotation(param, ctx);
+                let t_ret = self.instantiate_annotation(ret, ctx);
+                Rc::new(Type::Function(t_param, t_ret))
+            }
+        }
     }
 
     fn apply_subst(&self, ty: &Rc<Type>) -> Rc<Type> {
@@ -218,26 +253,15 @@ impl Inferrer {
         let t2 = self.apply_subst(t2);
 
         match (t1.as_ref(), t2.as_ref()) {
-            (Type::Unit, Type::Unit)
-            | (Type::Int, Type::Int)
-            | (Type::Float, Type::Float)
-            | (Type::Bool, Type::Bool)
-            | (Type::String, Type::String) => Ok(()),
-
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => Ok(()),
-            (Type::Var(id), _) => {
-                if self.occurs(*id, &t2) {
-                    return Err(TypeError::OccursCheck(*id, t2.clone(), span));
-                }
-                self.substitution.insert(*id, t2.clone());
-                Ok(())
-            }
-            (_, Type::Var(id)) => {
-                if self.occurs(*id, &t1) {
-                    return Err(TypeError::OccursCheck(*id, t1.clone(), span));
-                }
-                self.substitution.insert(*id, t1.clone());
-                Ok(())
+            (Type::Var(id), _) => self.unify_var(*id, &t2, span),
+            (_, Type::Var(id)) => self.unify_var(*id, &t1, span),
+
+            (Type::Con(n1), Type::Con(n2)) if n1 == n2 => Ok(()),
+
+            (Type::App(l1, r1), Type::App(l2, r2)) => {
+                self.unify(l1, l2, span)?;
+                self.unify(r1, r2, span)
             }
 
             (Type::Pair(a1, b1), Type::Pair(a2, b2)) => {
@@ -252,13 +276,16 @@ impl Inferrer {
                 Ok(())
             }
 
-            (Type::List(a1), Type::List(a2)) => {
-                self.unify(a1, a2, span)?;
-                Ok(())
-            }
-
             _ => Err(TypeError::Mismatch(t1.clone(), t2.clone(), span)),
         }
+    }
+
+    fn unify_var(&mut self, id: TypeID, ty: &Rc<Type>, span: Span) -> Result<(), TypeError> {
+        if self.occurs(id, ty) {
+            return Err(TypeError::OccursCheck(id, ty.clone(), span));
+        }
+        self.substitution.insert(id, ty.clone());
+        Ok(())
     }
 
     fn free_in_type(&self, ty: &Rc<Type>) -> HashSet<TypeID> {
@@ -341,7 +368,7 @@ impl Inferrer {
             }),
             ResolvedPatternKind::Unit => Ok(TypedPattern {
                 kind: TypedPatternKind::Unit,
-                ty: Rc::new(Type::Unit),
+                ty: Rc::new(Type::Con(UNIT_TYPE)),
                 span,
             }),
             ResolvedPatternKind::Pair(p1, p2) => {
@@ -383,27 +410,27 @@ impl Inferrer {
         match expr.kind {
             ResolvedKind::IntLit(i) => Ok(Typed {
                 kind: TypedKind::IntLit(i),
-                ty: Rc::new(Type::Int),
+                ty: Rc::new(Type::Con(INT_TYPE)),
                 span,
             }),
             ResolvedKind::FloatLit(f) => Ok(Typed {
                 kind: TypedKind::FloatLit(f),
-                ty: Rc::new(Type::Float),
+                ty: Rc::new(Type::Con(FLOAT_TYPE)),
                 span,
             }),
             ResolvedKind::BoolLit(b) => Ok(Typed {
                 kind: TypedKind::BoolLit(b),
-                ty: Rc::new(Type::Bool),
+                ty: Rc::new(Type::Con(BOOL_TYPE)),
                 span,
             }),
             ResolvedKind::StringLit(s) => Ok(Typed {
                 kind: TypedKind::StringLit(s),
-                ty: Rc::new(Type::String),
+                ty: Rc::new(Type::Con(STRING_TYPE)),
                 span,
             }),
             ResolvedKind::UnitLit => Ok(Typed {
                 kind: TypedKind::UnitLit,
-                ty: Rc::new(Type::Unit),
+                ty: Rc::new(Type::Con(UNIT_TYPE)),
                 span,
             }),
             ResolvedKind::PairLit(first, second) => {
@@ -532,7 +559,7 @@ impl Inferrer {
 
             ResolvedKind::If(condition, consequent, alternative) => {
                 let typed_cond = self.infer_type(env, *condition)?;
-                self.unify(&typed_cond.ty, &Rc::new(Type::Bool), typed_cond.span)?;
+                self.unify(&typed_cond.ty, &Rc::new(Type::Con(BOOL_TYPE)), typed_cond.span)?;
 
                 let typed_cons = self.infer_type(env, *consequent)?;
                 let typed_alt = self.infer_type(env, *alternative)?;
@@ -620,12 +647,12 @@ impl Inferrer {
                 let typed_left = self.infer_type(env, *left)?;
                 let typed_right = self.infer_type(env, *right)?;
 
-                self.unify(&typed_left.ty, &Rc::new(Type::Bool), typed_left.span)?;
-                self.unify(&typed_right.ty, &Rc::new(Type::Bool), typed_right.span)?;
+                self.unify(&typed_left.ty, &Rc::new(Type::Con(BOOL_TYPE)), typed_left.span)?;
+                self.unify(&typed_right.ty, &Rc::new(Type::Con(BOOL_TYPE)), typed_right.span)?;
 
                 Ok(Typed {
                     kind: TypedKind::BinOp(op, Box::new(typed_left), Box::new(typed_right)),
-                    ty: Rc::new(Type::Bool),
+                    ty: Rc::new(Type::Con(BOOL_TYPE)),
                     span,
                 })
             }

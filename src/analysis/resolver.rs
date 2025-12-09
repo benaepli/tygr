@@ -16,9 +16,9 @@ impl fmt::Display for Name {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeID(pub usize);
+pub struct DefID(pub usize);
 
-impl fmt::Display for TypeID {
+impl fmt::Display for DefID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -67,7 +67,7 @@ impl Resolved {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedAnnotationKind {
-    Var(TypeID),
+    Var(DefID),
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
@@ -100,7 +100,7 @@ pub enum ResolvedKind {
         value: Box<Resolved>,
         body: Box<Resolved>,
         value_type: Option<ResolvedAnnotation>,
-        type_params: Vec<TypeID>,
+        type_params: Vec<DefID>,
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
@@ -129,7 +129,7 @@ pub enum ResolutionError {
 }
 
 type Scope = HashMap<String, Name>;
-type TypeScope = HashMap<String, TypeID>;
+type TypeScope = HashMap<String, DefID>;
 
 pub struct Resolver {
     scopes: Vec<Scope>,
@@ -137,7 +137,7 @@ pub struct Resolver {
     builtins: HashMap<Name, BuiltinFn>,
 
     type_scopes: Vec<TypeScope>,
-    next_type: TypeID,
+    next_type: DefID,
 }
 
 impl Resolver {
@@ -167,9 +167,9 @@ impl Resolver {
         id
     }
 
-    fn new_id(&mut self) -> TypeID {
+    fn new_id(&mut self) -> DefID {
         let id = self.next_type;
-        self.next_type = TypeID(self.next_type.0 + 1);
+        self.next_type = DefID(self.next_type.0 + 1);
         id
     }
 
