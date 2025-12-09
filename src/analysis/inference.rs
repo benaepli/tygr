@@ -1,22 +1,13 @@
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedKind, ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
+    Name, Resolved, ResolvedKind, ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, TypeID,
 };
-use crate::builtin::{BuiltinFn, builtin_type};
+use crate::builtin::BuiltinFn;
 use crate::parser::{BinOp, Span};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 use thiserror::Error;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeID(pub usize);
-
-impl fmt::Display for TypeID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct TypeScheme {
@@ -441,6 +432,7 @@ impl Inferrer {
                 param,
                 body,
                 captures,
+                param_type,
             } => {
                 let mut new_env = env.clone();
                 let typed_param = self.infer_pattern(param, &mut new_env)?;
@@ -484,6 +476,8 @@ impl Inferrer {
                 pattern,
                 value,
                 body,
+                value_type,
+                type_params,
             } => {
                 let typed_value = self.infer_type(env, *value)?;
                 let value_ty = self.apply_subst(&typed_value.ty);
@@ -637,7 +631,7 @@ impl Inferrer {
             }
 
             ResolvedKind::Builtin(builtin) => {
-                let scheme = builtin_type(&builtin);
+                let scheme = builtin.type_scheme();
                 let ty = self.instantiate(&scheme);
 
                 Ok(Typed {

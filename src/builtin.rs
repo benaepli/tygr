@@ -1,4 +1,5 @@
 use crate::analysis::inference::{Type, TypeScheme};
+use crate::analysis::resolver::TypeID;
 use phf::Map;
 use phf_macros::phf_map;
 use std::rc::Rc;
@@ -101,36 +102,47 @@ fn func(a: Type, b: Type) -> Type {
     Type::Function(Rc::new(a), Rc::new(b))
 }
 
-pub fn builtin_type(builtin: &BuiltinFn) -> TypeScheme {
-    use BuiltinFn::*;
+impl BuiltinFn {
+    pub fn type_scheme(&self) -> TypeScheme {
+        use BuiltinFn::*;
 
-    match builtin {
-        IntAdd | IntSubtract | IntMultiply | IntDivide => {
-            mono(func(Type::Int, func(Type::Int, Type::Int)))
+        match self {
+            IntAdd | IntSubtract | IntMultiply | IntDivide => {
+                mono(func(Type::Int, func(Type::Int, Type::Int)))
+            }
+            FloatAdd | FloatSubtract | FloatMultiply | FloatDivide => {
+                mono(func(Type::Float, func(Type::Float, Type::Float)))
+            }
+
+            IntEqual | IntNotEqual | IntLessEqual | IntGreaterEqual | IntLess | IntGreater => {
+                mono(func(Type::Int, func(Type::Int, Type::Bool)))
+            }
+            FloatEqual | FloatNotEqual | FloatLessEqual | FloatGreaterEqual | FloatLess
+            | FloatGreater => mono(func(Type::Float, func(Type::Float, Type::Bool))),
+            BoolEqual | BoolNotEqual => mono(func(Type::Bool, func(Type::Bool, Type::Bool))),
+
+            IntNegate => mono(func(Type::Int, Type::Int)),
+            FloatNegate => mono(func(Type::Float, Type::Float)),
+            Not => mono(func(Type::Bool, Type::Bool)),
+
+            StringConcat => mono(func(Type::String, func(Type::String, Type::String))),
+
+            Print => mono(func(Type::String, Type::String)),
+            StringOfFloat => mono(func(Type::Float, Type::String)),
+            StringOfInt => mono(func(Type::Int, Type::String)),
+            FloatOfInt => mono(func(Type::Int, Type::Float)),
+            Floor => mono(func(Type::Float, Type::Int)),
+            Ceil => mono(func(Type::Float, Type::Int)),
+            TimeMicro => mono(func(Type::Unit, Type::Int)),
         }
-        FloatAdd | FloatSubtract | FloatMultiply | FloatDivide => {
-            mono(func(Type::Float, func(Type::Float, Type::Float)))
-        }
-
-        IntEqual | IntNotEqual | IntLessEqual | IntGreaterEqual | IntLess | IntGreater => {
-            mono(func(Type::Int, func(Type::Int, Type::Bool)))
-        }
-        FloatEqual | FloatNotEqual | FloatLessEqual | FloatGreaterEqual | FloatLess
-        | FloatGreater => mono(func(Type::Float, func(Type::Float, Type::Bool))),
-        BoolEqual | BoolNotEqual => mono(func(Type::Bool, func(Type::Bool, Type::Bool))),
-
-        IntNegate => mono(func(Type::Int, Type::Int)),
-        FloatNegate => mono(func(Type::Float, Type::Float)),
-        Not => mono(func(Type::Bool, Type::Bool)),
-
-        StringConcat => mono(func(Type::String, func(Type::String, Type::String))),
-
-        Print => mono(func(Type::String, Type::String)),
-        StringOfFloat => mono(func(Type::Float, Type::String)),
-        StringOfInt => mono(func(Type::Int, Type::String)),
-        FloatOfInt => mono(func(Type::Int, Type::Float)),
-        Floor => mono(func(Type::Float, Type::Int)),
-        Ceil => mono(func(Type::Float, Type::Int)),
-        TimeMicro => mono(func(Type::Unit, Type::Int)),
     }
 }
+
+pub static BUILTINS_TYPES: Map<&'static str, TypeID> = phf_map! {
+    "int" => TypeID(0),
+    "float" => TypeID(1),
+    "bool" => TypeID(2),
+    "list" => TypeID(3),
+};
+
+pub static TYPE_BASE: TypeID = TypeID(BUILTINS_TYPES.len());

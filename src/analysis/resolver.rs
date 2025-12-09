@@ -1,5 +1,7 @@
-use crate::builtin::{BUILTINS, BuiltinFn};
-use crate::parser::{BinOp, Expr, ExprKind, Pattern, PatternKind, Span};
+use crate::builtin::{BUILTINS, BUILTINS_TYPES, BuiltinFn, TYPE_BASE};
+use crate::parser::{
+    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
@@ -8,6 +10,15 @@ use thiserror::Error;
 pub struct Name(pub usize);
 
 impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeID(pub usize);
+
+impl fmt::Display for TypeID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -55,18 +66,41 @@ impl Resolved {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedAnnotationKind {
+    Var(TypeID),
+    App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
+    Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
+    Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedAnnotation {
+    pub kind: ResolvedAnnotationKind,
+    pub span: Span,
+}
+
+impl ResolvedAnnotation {
+    fn new(kind: ResolvedAnnotationKind, span: Span) -> Self {
+        ResolvedAnnotation { kind, span }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedKind {
     Var(Name),
     Lambda {
         param: ResolvedPattern,
         body: Box<Resolved>,
         captures: HashSet<Name>,
+        param_type: Option<ResolvedAnnotation>,
     },
     App(Box<Resolved>, Box<Resolved>),
     Let {
         pattern: ResolvedPattern,
         value: Box<Resolved>,
         body: Box<Resolved>,
+        value_type: Option<ResolvedAnnotation>,
+        type_params: Vec<TypeID>,
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
@@ -95,11 +129,15 @@ pub enum ResolutionError {
 }
 
 type Scope = HashMap<String, Name>;
+type TypeScope = HashMap<String, TypeID>;
 
 pub struct Resolver {
     scopes: Vec<Scope>,
     next_id: Name,
     builtins: HashMap<Name, BuiltinFn>,
+
+    type_scopes: Vec<TypeScope>,
+    next_type: TypeID,
 }
 
 impl Resolver {
@@ -108,6 +146,9 @@ impl Resolver {
             scopes: vec![],
             next_id: Name(0),
             builtins: HashMap::new(),
+
+            type_scopes: vec![],
+            next_type: TYPE_BASE,
         };
 
         let mut global = Scope::new();
@@ -117,7 +158,6 @@ impl Resolver {
             resolver.builtins.insert(name_id, builtin.clone());
         }
         resolver.scopes.push(global);
-
         resolver
     }
 
@@ -125,6 +165,58 @@ impl Resolver {
         let id = self.next_id;
         self.next_id = Name(self.next_id.0 + 1);
         id
+    }
+
+    fn new_id(&mut self) -> TypeID {
+        let id = self.next_type;
+        self.next_type = TypeID(self.next_type.0 + 1);
+        id
+    }
+
+    fn resolve_annotation(
+        &mut self,
+        annot: Annotation,
+    ) -> Result<ResolvedAnnotation, ResolutionError> {
+        let span = annot.span;
+
+        let kind = match annot.kind {
+            AnnotationKind::Var(name) => {
+                for scope in self.type_scopes.iter().rev() {
+                    if let Some(id) = scope.get(&name) {
+                        return Ok(ResolvedAnnotation::new(
+                            ResolvedAnnotationKind::Var(*id),
+                            span,
+                        ));
+                    }
+                }
+
+                if let Some(id) = BUILTINS_TYPES.get(&name) {
+                    ResolvedAnnotationKind::Var(*id)
+                } else {
+                    return Err(ResolutionError::VariableNotFound(name, span));
+                }
+            }
+
+            AnnotationKind::App(lhs, rhs) => {
+                let r_lhs = self.resolve_annotation(*lhs)?;
+                let r_rhs = self.resolve_annotation(*rhs)?;
+                ResolvedAnnotationKind::App(Box::new(r_lhs), Box::new(r_rhs))
+            }
+
+            AnnotationKind::Pair(lhs, rhs) => {
+                let r_lhs = self.resolve_annotation(*lhs)?;
+                let r_rhs = self.resolve_annotation(*rhs)?;
+                ResolvedAnnotationKind::Pair(Box::new(r_lhs), Box::new(r_rhs))
+            }
+
+            AnnotationKind::Lambda(param, ret) => {
+                let r_param = self.resolve_annotation(*param)?;
+                let r_ret = self.resolve_annotation(*ret)?;
+                ResolvedAnnotationKind::Lambda(Box::new(r_param), Box::new(r_ret))
+            }
+        };
+
+        Ok(ResolvedAnnotation::new(kind, span))
     }
 
     pub fn resolve(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
@@ -276,6 +368,20 @@ impl Resolver {
             }
 
             ExprKind::Let(pattern, value, body, generics, annot) => {
+                let mut new_type_scope = HashMap::new();
+                let mut resolved_generics = Vec::new();
+                for generic in generics {
+                    let id = self.new_id();
+                    new_type_scope.insert(generic.name.clone(), id);
+                    resolved_generics.push(id);
+                }
+                self.type_scopes.push(new_type_scope);
+                let resolved_annot = if let Some(a) = annot {
+                    Some(self.resolve_annotation(a)?)
+                } else {
+                    None
+                };
+
                 let (resolved_value, free_in_value) = self.analyze(*value)?;
 
                 let mut new_scope = HashMap::new();
@@ -290,12 +396,16 @@ impl Resolver {
                 }
 
                 let all_free = free_in_value.union(&free_in_body).cloned().collect();
+
+                self.type_scopes.pop();
                 Ok((
                     Resolved::new(
                         ResolvedKind::Let {
                             pattern: resolved,
                             value: Box::new(resolved_value),
                             body: Box::new(resolved_body),
+                            value_type: resolved_annot,
+                            type_params: resolved_generics,
                         },
                         span,
                     ),
@@ -304,6 +414,12 @@ impl Resolver {
             }
 
             ExprKind::Lambda(param_pattern, body, annot) => {
+                let resolved_annot = if let Some(a) = annot {
+                    Some(self.resolve_annotation(a)?)
+                } else {
+                    None
+                };
+
                 let mut new_scope = HashMap::new();
                 let resolved = self.analyze_pattern(param_pattern, &mut new_scope)?;
 
@@ -321,6 +437,7 @@ impl Resolver {
                             param: resolved,
                             body: Box::new(resolved_body),
                             captures: free_in_body.clone(),
+                            param_type: resolved_annot,
                         },
                         span,
                     ),
