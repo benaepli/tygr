@@ -36,6 +36,7 @@ pub enum TokenKind {
     Comma,
     Underscore,
     Colon,
+    Dot,
 
     Plus,
     Minus,
@@ -103,6 +104,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Comma => write!(f, ","),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Colon => write!(f, ":"),
+            TokenKind::Dot => write!(f, "."),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),
             TokenKind::Star => write!(f, "*"),
@@ -190,6 +192,7 @@ fn is_special_char(ch: char) -> bool {
             | '"'
             | '~'
             | ':'
+            | '.'
             | '['
             | ']'
             | '{'
@@ -403,6 +406,7 @@ impl<'a> Iterator for Lexer<'a> {
 
             '^' => Ok(TokenKind::Caret),
             ':' => Ok(self.next_or(':', TokenKind::Cons, TokenKind::Colon)),
+            '.' => Ok(TokenKind::Dot),
 
             '!' => {
                 if self.match_next('=') {

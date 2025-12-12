@@ -71,7 +71,7 @@ pub enum ResolvedAnnotationKind {
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
-    Struct(HashMap<String, ResolvedAnnotation>),
+    Record(HashMap<String, ResolvedAnnotation>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,8 +115,10 @@ pub enum ResolvedKind {
     BoolLit(bool),
     StringLit(String),
     EmptyListLit,
+    RecordLit(HashMap<String, Resolved>),
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
+    FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
 }
@@ -131,6 +133,8 @@ pub enum ResolutionError {
     DuplicateTypeAlias(String, Span),
     #[error("type alias `{0}` expects {1} type argument(s), but {2} were provided")]
     WrongNumberOfTypeArguments(String, usize, usize, Span),
+    #[error("field `{0}` appears more than once in record")]
+    DuplicateRecordField(String, Span),
 }
 
 type Scope = HashMap<String, Name>;
@@ -231,7 +235,7 @@ impl Resolver {
                 Box::new(self.instantiate_alias(param, substitutions)),
                 Box::new(self.instantiate_alias(ret, substitutions)),
             ),
-            ResolvedAnnotationKind::Struct(m) => ResolvedAnnotationKind::Struct(
+            ResolvedAnnotationKind::Record(m) => ResolvedAnnotationKind::Record(
                 m.iter()
                     .map(|(k, v)| (k.clone(), self.instantiate_alias(v, substitutions)))
                     .collect(),
@@ -338,14 +342,16 @@ impl Resolver {
                     span,
                 )))
             }
-            AnnotationKind::Struct(m) => {
+            AnnotationKind::Record(m) => {
                 let mut resolved = HashMap::new();
                 for (k, v) in m.into_iter() {
-                    if resolved.contains_key(&k) {}
+                    if resolved.contains_key(&k) {
+                        return Err(ResolutionError::DuplicateRecordField(k, span));
+                    }
                     resolved.insert(k, self.resolve_annotation(v)?.finalize(span)?);
                 }
                 Ok(Partial::Done(ResolvedAnnotation::new(
-                    ResolvedAnnotationKind::Struct(resolved),
+                    ResolvedAnnotationKind::Record(resolved),
                     span,
                 )))
             }
@@ -469,7 +475,22 @@ impl Resolver {
                     all_free,
                 ))
             }
-            ExprKind::StructLit(s) => {}
+            ExprKind::RecordLit(s) => {
+                let mut resolved = HashMap::new();
+                let mut all_free = HashSet::new();
+                for (k, v) in s.into_iter() {
+                    if resolved.contains_key(&k) {
+                        return Err(ResolutionError::DuplicateRecordField(k, span));
+                    }
+                    let (r, v) = self.analyze(v)?;
+                    resolved.insert(k, r);
+                    all_free = all_free.union(&v).cloned().collect();
+                }
+                Ok((
+                    Resolved::new(ResolvedKind::RecordLit(resolved), span),
+                    all_free,
+                ))
+            }
             ExprKind::BinOp(op, a, b) => {
                 let (resolved_a, free_a) = self.analyze(*a)?;
                 let (resolved_b, free_b) = self.analyze(*b)?;
@@ -658,7 +679,13 @@ impl Resolver {
                     all_free,
                 ))
             }
-            ExprKind::FieldAccess(_, _) => todo!(),
+            ExprKind::FieldAccess(expr, field) => {
+                let (resolved, free) = self.analyze(*expr)?;
+                Ok((
+                    Resolved::new(ResolvedKind::FieldAccess(Box::new(resolved), field), span),
+                    free,
+                ))
+            }
         }
     }
 }

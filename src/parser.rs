@@ -41,7 +41,7 @@ pub enum AnnotationKind {
     App(Box<Annotation>, Box<Annotation>),
     Pair(Box<Annotation>, Box<Annotation>),
     Lambda(Box<Annotation>, Box<Annotation>),
-    Struct(Vec<(String, Annotation)>),
+    Record(Vec<(String, Annotation)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,7 +127,7 @@ pub enum ExprKind {
     BoolLit(bool),
     StringLit(String),
     EmptyListLit,
-    StructLit(Vec<(String, Expr)>),
+    RecordLit(Vec<(String, Expr)>),
 
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     Cons(Box<Expr>, Box<Expr>),
@@ -329,7 +329,24 @@ where
             choice((paren_expr, atom))
         };
 
-        let simple2 = simple.clone();
+        #[derive(Clone)]
+        enum PostfixOp {
+            FieldAccess(String, Span),
+        }
+
+        let ident = select! { TokenKind::Identifier(s) => s.clone() };
+
+        let postfix_op = just(TokenKind::Dot)
+            .ignore_then(ident.clone())
+            .map_with(|name, e| PostfixOp::FieldAccess(name, e.span()));
+
+        let postfix = simple.foldl(postfix_op.repeated(), |lhs, op| match op {
+            PostfixOp::FieldAccess(name, op_span) => {
+                let span = lhs.span.union(op_span);
+                Expr::new(ExprKind::FieldAccess(Box::new(lhs), name), span)
+            }
+        });
+
         let unary = recursive(|unary| {
             choice((
                 just(TokenKind::Minus)
@@ -350,7 +367,7 @@ where
                     .map_with(|(op_fn, val), e| {
                         Expr::new(ExprKind::App(Box::new(op_fn), Box::new(val)), e.span())
                     }),
-                simple2,
+                postfix.clone(),
             ))
         });
 
@@ -362,7 +379,7 @@ where
                 unary.clone(),
             ));
 
-            fix_or_unary.clone().foldl(simple.repeated(), |func, arg| {
+            fix_or_unary.clone().foldl(postfix.repeated(), |func, arg| {
                 let span = func.span.union(arg.span);
                 Expr::new(ExprKind::App(Box::new(func), Box::new(arg)), span)
             })
