@@ -48,6 +48,16 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         },
     });
     let mut resolver = Resolver::new();
+    for alias in aliases {
+        match resolver.resolve_type_alias(alias) {
+            Err(e) => {
+                report_resolution_errors(input, &[e], name)?;
+                return Err(anyhow!("resolution error"));
+            }
+            Ok(r) => r,
+        }
+    }
+
     let resolved = match resolver.resolve(desugared) {
         Err(e) => {
             report_resolution_errors(input, &[e], name)?;

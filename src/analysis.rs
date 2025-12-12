@@ -2,7 +2,7 @@ pub mod format;
 pub mod inference;
 pub mod resolver;
 
-use crate::parser::{Declaration, Expr, ExprKind, LetDeclaration, Pattern, PatternKind};
+use crate::parser::{Expr, ExprKind, LetDeclaration, Pattern, PatternKind};
 use chumsky::span::Span;
 
 fn pattern_to_expr(pattern: &Pattern) -> Expr {

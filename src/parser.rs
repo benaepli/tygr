@@ -41,6 +41,7 @@ pub enum AnnotationKind {
     App(Box<Annotation>, Box<Annotation>),
     Pair(Box<Annotation>, Box<Annotation>),
     Lambda(Box<Annotation>, Box<Annotation>),
+    Struct(Vec<(String, Annotation)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,9 +127,11 @@ pub enum ExprKind {
     BoolLit(bool),
     StringLit(String),
     EmptyListLit,
+    StructLit(Vec<(String, Expr)>),
 
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     Cons(Box<Expr>, Box<Expr>),
+    FieldAccess(Box<Expr>, String),
 }
 
 fn build_bin_op<'a, I, OP, P>(

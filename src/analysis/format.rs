@@ -33,6 +33,31 @@ pub fn report_resolution_errors(
                 .with_notes(vec![
                     "each variable can only be bound once in a pattern".to_string(),
                 ]),
+            ResolutionError::DuplicateTypeAlias(name, span) => Diagnostic::error()
+                .with_message(format!("type alias `{}` is already defined", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("duplicate type alias definition"),
+                ])
+                .with_notes(vec![
+                    "each type alias can only be defined once".to_string(),
+                ]),
+            ResolutionError::WrongNumberOfTypeArguments(name, expected, found, span) => {
+                Diagnostic::error()
+                    .with_message(format!(
+                        "wrong number of type arguments for `{}`",
+                        name
+                    ))
+                    .with_labels(vec![Label::primary(file_id, span.start..span.end)
+                        .with_message(format!(
+                            "expected {} type argument(s), found {}",
+                            expected, found
+                        ))])
+                    .with_notes(vec![format!(
+                        "type alias `{}` requires exactly {} type argument(s)",
+                        name, expected
+                    )])
+            }
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;

@@ -1,4 +1,6 @@
-let fold_right[a][b]: (a -> b -> b) -> list[a] -> b -> b = fix(fn self => fn f => fn ls => fn x => match ls with
+type mylist = list
+
+let fold_right[a][b]: (a -> b -> b) -> mylist[a] -> b -> b = fix(fn self => fn f => fn ls => fn x => match ls with
     | [] => x
     | hd::tl => f hd (self f tl x))
 
