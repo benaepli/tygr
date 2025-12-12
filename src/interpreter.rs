@@ -34,6 +34,7 @@ pub enum Value {
     },
     /// A built-in function implemented in Rust.
     Builtin(BuiltinFn),
+    Record(HashMap<String, Value>),
 }
 
 impl fmt::Debug for Value {

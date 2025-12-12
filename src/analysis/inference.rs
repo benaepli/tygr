@@ -6,7 +6,7 @@ use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE,
 };
 use crate::parser::{BinOp, Span};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -35,6 +35,7 @@ pub enum Type {
 
     Function(Rc<Type>, Rc<Type>),
     Pair(Rc<Type>, Rc<Type>),
+    Record(BTreeMap<String, Rc<Type>>),
 }
 
 impl fmt::Display for Type {
@@ -48,6 +49,18 @@ impl fmt::Display for Type {
                 Type::Function(_, _) => write!(f, "({}) -> {}", arg, ret),
                 _ => write!(f, "{} -> {}", arg, ret),
             },
+            Type::Record(fields) => {
+                write!(f, "{{ ")?;
+                let mut first = true;
+                for (name, ty) in fields {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, ty)?;
+                    first = false;
+                }
+                write!(f, " }}")
+            }
         }
     }
 }
@@ -110,8 +123,10 @@ pub enum TypedKind {
     BoolLit(bool),
     StringLit(String),
     EmptyListLit,
+    RecordLit(BTreeMap<String, Typed>),
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
+    FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
 }
@@ -179,6 +194,13 @@ impl Inferrer {
                 let t_ret = self.instantiate_annotation(ret);
                 Rc::new(Type::Function(t_param, t_ret))
             }
+            ResolvedAnnotationKind::Record(fields) => {
+                let mut field_types = BTreeMap::new();
+                for (name, annot) in fields {
+                    field_types.insert(name.clone(), self.instantiate_annotation(annot));
+                }
+                Rc::new(Type::Record(field_types))
+            }
         }
     }
 
@@ -206,7 +228,14 @@ impl Inferrer {
                 let rhs_subst = self.apply_subst(rhs);
                 Rc::new(Type::App(lhs_subst, rhs_subst))
             }
-            _ => ty.clone(),
+            Type::Record(fields) => {
+                let mut new_fields = BTreeMap::new();
+                for (name, ty) in fields {
+                    new_fields.insert(name.clone(), self.apply_subst(ty));
+                }
+                Rc::new(Type::Record(new_fields))
+            }
+            Type::Star(_) => ty.clone(),
         }
     }
 
@@ -246,6 +275,13 @@ impl Inferrer {
                 let new_rhs = self.instantiate_with_mapping(rhs, mapping);
                 Rc::new(Type::App(new_lhs, new_rhs))
             }
+            Type::Record(fields) => {
+                let mut new_fields = BTreeMap::new();
+                for (name, ty) in fields {
+                    new_fields.insert(name.clone(), self.instantiate_with_mapping(ty, mapping));
+                }
+                Rc::new(Type::Record(new_fields))
+            }
             Type::Star(_) => ty.clone(),
         }
     }
@@ -257,7 +293,8 @@ impl Inferrer {
             Type::Pair(a, b) => self.occurs(id, a) || self.occurs(id, b),
             Type::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
             Type::App(lhs, rhs) => self.occurs(id, lhs) || self.occurs(id, rhs),
-            _ => false,
+            Type::Record(fields) => fields.values().any(|ty| self.occurs(id, ty)),
+            Type::Star(_) => false,
         }
     }
 
@@ -286,6 +323,16 @@ impl Inferrer {
             (Type::Function(arg1, ret1), Type::Function(arg2, ret2)) => {
                 self.unify(arg1, arg2, span)?;
                 self.unify(ret1, ret2, span)?;
+                Ok(())
+            }
+            (Type::Record(s1), Type::Record(s2)) => {
+                let equal_keys = s1.len() == s2.len() && s1.keys().all(|k| s2.contains_key(k));
+                if !equal_keys {}
+                for k in s1.keys() {
+                    let t1 = &s1[k];
+                    let t2 = &s2[k];
+                    self.unify(t1, t2, span)?;
+                }
                 Ok(())
             }
 
@@ -322,6 +369,13 @@ impl Inferrer {
             Type::App(lhs, rhs) => {
                 let mut set = self.free_in_type(lhs);
                 set.extend(self.free_in_type(rhs));
+                set
+            }
+            Type::Record(fields) => {
+                let mut set = HashSet::new();
+                for ty in fields.values() {
+                    set.extend(self.free_in_type(ty));
+                }
                 set
             }
             Type::Star(_) => HashSet::new(),
@@ -677,6 +731,26 @@ impl Inferrer {
                 })
             }
 
+            ResolvedKind::RecordLit(fields) => {
+                let mut typed_fields = BTreeMap::new();
+                let mut field_types = BTreeMap::new();
+
+                for (name, expr) in fields {
+                    let typed_expr = self.infer_type(env, expr)?;
+                    let field_ty = self.apply_subst(&typed_expr.ty);
+                    field_types.insert(name.clone(), field_ty);
+                    typed_fields.insert(name, typed_expr);
+                }
+
+                let record_ty = Rc::new(Type::Record(field_types));
+
+                Ok(Typed {
+                    kind: TypedKind::RecordLit(typed_fields),
+                    ty: record_ty,
+                    span,
+                })
+            }
+
             ResolvedKind::BinOp(op, left, right) => {
                 let typed_left = self.infer_type(env, *left)?;
                 let typed_right = self.infer_type(env, *right)?;
@@ -695,6 +769,30 @@ impl Inferrer {
                 Ok(Typed {
                     kind: TypedKind::BinOp(op, Box::new(typed_left), Box::new(typed_right)),
                     ty: Rc::new(Type::Star(BOOL_TYPE)),
+                    span,
+                })
+            }
+
+            ResolvedKind::FieldAccess(expr, field_name) => {
+                let typed_expr = self.infer_type(env, *expr)?;
+                let field_ty = self.new_type();
+
+                let t1 = self.apply_subst(&typed_expr.ty);
+                let Type::Record(s) = t1.as_ref() else {
+                    todo!()
+                };
+
+                let mut expected_fields = s.clone();
+                expected_fields.insert(field_name.clone(), field_ty.clone());
+                let expected_struct_ty = Rc::new(Type::Record(expected_fields));
+
+                self.unify(&typed_expr.ty, &expected_struct_ty, span)?;
+
+                let result_ty = self.apply_subst(&field_ty);
+
+                Ok(Typed {
+                    kind: TypedKind::FieldAccess(Box::new(typed_expr), field_name),
+                    ty: result_ty,
                     span,
                 })
             }

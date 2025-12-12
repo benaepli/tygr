@@ -218,7 +218,22 @@ where
                 .ignore_then(annot.clone())
                 .then_ignore(just(TokenKind::RightParen));
 
-            choice((atom, paren))
+            let ident = select! { TokenKind::Identifier(s) => s.clone() };
+
+            let field = ident
+                .clone()
+                .then_ignore(just(TokenKind::Colon))
+                .then(annot.clone())
+                .map(|(name, typ)| (name, typ));
+
+            let record = field
+                .separated_by(just(TokenKind::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                .map_with(|fields, e| Annotation::new(AnnotationKind::Record(fields), e.span()));
+
+            choice((record, atom, paren))
         };
 
         let apply_parser = just(TokenKind::LeftBracket)
@@ -288,6 +303,7 @@ where
 {
     recursive(|expr| {
         let annotation_with_colon = just(TokenKind::Colon).ignore_then(annotation());
+        let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
         let simple = {
             let atom = choice((
@@ -326,15 +342,26 @@ where
                     }
                 });
 
-            choice((paren_expr, atom))
+            let field = ident
+                .clone()
+                .then_ignore(just(TokenKind::Colon))
+                .then(expr.clone())
+                .map(|(name, value)| (name, value));
+
+            let record_lit = field
+                .separated_by(just(TokenKind::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                .map_with(|fields, e| Expr::new(ExprKind::RecordLit(fields), e.span()));
+
+            choice((record_lit, paren_expr, atom))
         };
 
         #[derive(Clone)]
         enum PostfixOp {
             FieldAccess(String, Span),
         }
-
-        let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
         let postfix_op = just(TokenKind::Dot)
             .ignore_then(ident.clone())
