@@ -152,6 +152,12 @@ pub enum TypeError {
 
     #[error("unbound variable: {0}")]
     UnboundVariable(Name, Span),
+
+    #[error("record field mismatch: records have different fields")]
+    RecordFieldMismatch(Rc<Type>, Rc<Type>, Span),
+
+    #[error("field access on non-record type: {0}")]
+    FieldAccessOnNonRecord(Rc<Type>, Span),
 }
 
 impl Inferrer {
@@ -327,7 +333,9 @@ impl Inferrer {
             }
             (Type::Record(s1), Type::Record(s2)) => {
                 let equal_keys = s1.len() == s2.len() && s1.keys().all(|k| s2.contains_key(k));
-                if !equal_keys {}
+                if !equal_keys {
+                    return Err(TypeError::RecordFieldMismatch(t1.clone(), t2.clone(), span));
+                }
                 for k in s1.keys() {
                     let t1 = &s1[k];
                     let t2 = &s2[k];
@@ -779,7 +787,7 @@ impl Inferrer {
 
                 let t1 = self.apply_subst(&typed_expr.ty);
                 let Type::Record(s) = t1.as_ref() else {
-                    todo!()
+                    return Err(TypeError::FieldAccessOnNonRecord(t1.clone(), span));
                 };
 
                 let mut expected_fields = s.clone();

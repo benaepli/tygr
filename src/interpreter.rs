@@ -55,6 +55,13 @@ impl fmt::Debug for Value {
                 .field("args", args)
                 .finish(),
             Value::Builtin(b) => f.debug_tuple("Builtin").field(b).finish(),
+            Value::Record(fields) => {
+                let mut debug_map = f.debug_map();
+                for (name, value) in fields {
+                    debug_map.entry(&name, value);
+                }
+                debug_map.finish()
+            }
         }
     }
 }
@@ -82,6 +89,18 @@ impl fmt::Display for Value {
             Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { .. } => write!(f, "<partial_builtin>"),
             Value::Builtin(_) => write!(f, "<builtin>"),
+            Value::Record(fields) => {
+                write!(f, "{{ ")?;
+                let mut first = true;
+                for (name, value) in fields {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, value)?;
+                    first = false;
+                }
+                write!(f, " }}")
+            }
         }
     }
 }
@@ -538,6 +557,29 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 _ => Err(EvalError::TypeMismatch(
                     "Cons second argument must be a list".into(),
                 )),
+            }
+        }
+        TypedKind::RecordLit(fields) => {
+            let mut record_fields = HashMap::new();
+            for (name, expr) in fields {
+                let value = eval(expr, env)?;
+                record_fields.insert(name.clone(), (*value).clone());
+            }
+            Ok(Rc::new(Value::Record(record_fields)))
+        }
+        TypedKind::FieldAccess(record_expr, field_name) => {
+            let record_val = eval(record_expr, env)?;
+            match &*record_val {
+                Value::Record(fields) => fields
+                    .get(field_name)
+                    .map(|v| Rc::new(v.clone()))
+                    .ok_or_else(|| {
+                        EvalError::TypeMismatch(format!("Field {} not found in record", field_name))
+                    }),
+                _ => Err(EvalError::TypeMismatch(format!(
+                    "Expected record for field access, found {}",
+                    record_val
+                ))),
             }
         }
     }

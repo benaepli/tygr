@@ -1,0 +1,3 @@
+type record[a] = {field1: string, field2: a}
+
+let b: record[int] = { field1: "0", field2: 0 }

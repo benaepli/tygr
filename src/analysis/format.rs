@@ -102,6 +102,26 @@ pub fn report_type_errors(
                     Label::primary(file_id, span.start..span.end)
                         .with_message("not found in this scope"),
                 ]),
+            TypeError::RecordFieldMismatch(t1, t2, span) => Diagnostic::error()
+                .with_message("record field mismatch")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end).with_message(format!(
+                        "records have different fields: `{}` vs `{}`",
+                        t1, t2
+                    )),
+                ])
+                .with_notes(vec![
+                    "records must have exactly the same field names to unify".to_string(),
+                ]),
+            TypeError::FieldAccessOnNonRecord(ty, span) => Diagnostic::error()
+                .with_message("field access on non-record type")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end).with_message(format!(
+                        "cannot access field on type `{}`",
+                        ty
+                    )),
+                ])
+                .with_notes(vec!["field access is only allowed on record types".to_string()]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
