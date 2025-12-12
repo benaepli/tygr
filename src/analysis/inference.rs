@@ -201,6 +201,11 @@ impl Inferrer {
                 let ret_subst = self.apply_subst(ret);
                 Rc::new(Type::Function(arg_subst, ret_subst))
             }
+            Type::App(lhs, rhs) => {
+                let lhs_subst = self.apply_subst(lhs);
+                let rhs_subst = self.apply_subst(rhs);
+                Rc::new(Type::App(lhs_subst, rhs_subst))
+            }
             _ => ty.clone(),
         }
     }
@@ -236,7 +241,12 @@ impl Inferrer {
                 let new_ret = self.instantiate_with_mapping(ret, mapping);
                 Rc::new(Type::Function(new_arg, new_ret))
             }
-            _ => ty.clone(),
+            Type::App(lhs, rhs) => {
+                let new_lhs = self.instantiate_with_mapping(lhs, mapping);
+                let new_rhs = self.instantiate_with_mapping(rhs, mapping);
+                Rc::new(Type::App(new_lhs, new_rhs))
+            }
+            Type::Star(_) => ty.clone(),
         }
     }
 
@@ -246,6 +256,7 @@ impl Inferrer {
             Type::Var(var_id) => *var_id == id,
             Type::Pair(a, b) => self.occurs(id, a) || self.occurs(id, b),
             Type::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
+            Type::App(lhs, rhs) => self.occurs(id, lhs) || self.occurs(id, rhs),
             _ => false,
         }
     }
@@ -308,7 +319,12 @@ impl Inferrer {
                 set.extend(self.free_in_type(ret));
                 set
             }
-            _ => HashSet::new(),
+            Type::App(lhs, rhs) => {
+                let mut set = self.free_in_type(lhs);
+                set.extend(self.free_in_type(rhs));
+                set
+            }
+            Type::Star(_) => HashSet::new(),
         }
     }
 
@@ -513,8 +529,8 @@ impl Inferrer {
                 type_params,
             } => {
                 for param_id in type_params {
-                    self.type_ctx
-                        .insert(param_id, Rc::new(Type::Star(param_id)));
+                    let ty = self.new_type();
+                    self.type_ctx.insert(param_id, ty);
                 }
                 let typed_value = self.infer_type(env, *value)?;
                 if let Some(annot) = value_type {
