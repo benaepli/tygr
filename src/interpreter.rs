@@ -1,4 +1,5 @@
 use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
+use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{TypeName, Name};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
@@ -72,9 +73,20 @@ impl fmt::Debug for Value {
     }
 }
 
-impl fmt::Display for Value {
+pub struct ValueDisplay<'a> {
+    pub value: &'a Value,
+    pub name_table: &'a NameTable,
+}
+
+impl<'a> ValueDisplay<'a> {
+    pub fn new(value: &'a Value, name_table: &'a NameTable) -> Self {
+        Self { value, name_table }
+    }
+}
+
+impl<'a> fmt::Display for ValueDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match self.value {
             Value::Unit => write!(f, "()"),
             Value::Int(i) => write!(f, "{}", i),
             Value::Float(fl) => write!(f, "{}", fl),
@@ -86,11 +98,16 @@ impl fmt::Display for Value {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{}", val)?;
+                    write!(f, "{}", ValueDisplay::new(val, self.name_table))?;
                 }
                 f.write_str("]")
             }
-            Value::Pair(a, b) => write!(f, "({}, {})", a, b),
+            Value::Pair(a, b) => write!(
+                f,
+                "({}, {})",
+                ValueDisplay::new(a, self.name_table),
+                ValueDisplay::new(b, self.name_table)
+            ),
             Value::Closure { .. } => write!(f, "<closure>"),
             Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { .. } => write!(f, "<partial_builtin>"),
@@ -102,17 +119,20 @@ impl fmt::Display for Value {
                     if !first {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", name, value)?;
+                    write!(f, "{}: {}", name, ValueDisplay::new(value, self.name_table))?;
                     first = false;
                 }
                 write!(f, " }}")
             }
-            Value::Constructor(_def_id, name) => write!(f, "<{}>", name),
+            Value::Constructor(_def_id, name) => {
+                write!(f, "<{}>", self.name_table.lookup_name(name))
+            }
             Value::Adt(val, _def_id, name) => {
+                let ctor_name = self.name_table.lookup_name(name);
                 if let Value::Unit = **val {
-                    write!(f, "{}", name)
+                    write!(f, "{}", ctor_name)
                 } else {
-                    write!(f, "{}({})", name, val)
+                    write!(f, "{}({})", ctor_name, ValueDisplay::new(val, self.name_table))
                 }
             }
         }
@@ -181,7 +201,7 @@ fn bind_pattern(
                 Ok(())
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected unit, found {}",
+                    "expected unit, found {:?}",
                     value
                 )))
             }
@@ -192,7 +212,7 @@ fn bind_pattern(
                 bind_pattern(p2, v2.clone(), env)
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected pair, found {}",
+                    "expected pair, found {:?}",
                     value
                 )))
             }
@@ -203,13 +223,13 @@ fn bind_pattern(
                     Ok(())
                 } else {
                     Err(EvalError::PatternMismatch(format!(
-                        "expected empty list, found {}",
+                        "expected empty list, found {:?}",
                         value
                     )))
                 }
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected list, found {}",
+                    "expected list, found {:?}",
                     value
                 )))
             }
@@ -223,13 +243,13 @@ fn bind_pattern(
                     bind_pattern(p2, Rc::new(Value::List(remainder)), env)
                 } else {
                     Err(EvalError::PatternMismatch(format!(
-                        "got empty list {}",
+                        "got empty list {:?}",
                         value
                     )))
                 }
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected list, found {}",
+                    "expected list, found {:?}",
                     value
                 )))
             }
@@ -248,7 +268,7 @@ fn bind_pattern(
                 }
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected ADT constructor pattern, found {}",
+                    "expected ADT constructor pattern, found {:?}",
                     value
                 )))
             }
@@ -307,7 +327,7 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
                 i
             } else {
                 return Err(EvalError::TypeMismatch(format!(
-                    "Expected Int, found {}",
+                    "Expected Int, found {:?}",
                     $val
                 )));
             }
@@ -319,7 +339,7 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
                 f
             } else {
                 return Err(EvalError::TypeMismatch(format!(
-                    "Expected Float, found {}",
+                    "Expected Float, found {:?}",
                     $val
                 )));
             }
@@ -331,7 +351,7 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
                 b
             } else {
                 return Err(EvalError::TypeMismatch(format!(
-                    "Expected Bool, found {}",
+                    "Expected Bool, found {:?}",
                     $val
                 )));
             }
@@ -343,7 +363,7 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
                 s.clone()
             } else {
                 return Err(EvalError::TypeMismatch(format!(
-                    "Expected String, found {}",
+                    "Expected String, found {:?}",
                     $val
                 )));
             }
@@ -613,7 +633,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                         EvalError::TypeMismatch(format!("Field {} not found in record", field_name))
                     }),
                 _ => Err(EvalError::TypeMismatch(format!(
-                    "Expected record for field access, found {}",
+                    "Expected record for field access, found {:?}",
                     record_val
                 ))),
             }

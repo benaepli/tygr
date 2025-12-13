@@ -25,7 +25,9 @@ fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<Adt>
     (let_decls, adts, type_aliases)
 }
 
-pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
+use crate::analysis::name_table::NameTable;
+
+pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Error> {
     let mut lexer = Lexer::new(input);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(input, &errors, name)?;
@@ -94,5 +96,5 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         }
         Ok(t) => t,
     };
-    Ok(typed)
+    Ok((typed, name_table))
 }
