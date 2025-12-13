@@ -4,3 +4,8 @@ enum Option[a] =
 
 let e = Some(3)
 let Some(e) = e
+
+let e2 = None()
+let result = match e2 with
+    | None() => 0
+    | Some(a) => a

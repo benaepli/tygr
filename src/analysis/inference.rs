@@ -254,6 +254,8 @@ impl Inferrer {
                 },
             );
         }
+
+        self.adts.insert(adt.name, TypedAdt { schemes, ty });
     }
 
     fn apply_subst(&self, ty: &Rc<Type>) -> Rc<Type> {
