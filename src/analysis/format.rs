@@ -1,4 +1,4 @@
-use crate::analysis::inference::TypeError;
+use crate::analysis::inference::{TypeError, TypeDisplay};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::ResolutionError;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
@@ -115,14 +115,15 @@ pub fn report_type_errors(
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end).with_message(format!(
                         "expected type `{}`, found type `{}`",
-                        expected, found
+                        TypeDisplay::new(expected, name_table),
+                        TypeDisplay::new(found, name_table)
                     )),
                 ]),
             TypeError::OccursCheck(var, ty, span) => Diagnostic::error()
                 .with_message("infinite type detected")
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("recursive type: `'{}` occurs in `{}`", var, ty)),
+                        .with_message(format!("recursive type: `'{}` occurs in `{}`", var, TypeDisplay::new(ty, name_table))),
                 ]),
             TypeError::UnboundVariable(name, span) => {
                 let display_name = name_table.lookup_name(name);
@@ -138,7 +139,8 @@ pub fn report_type_errors(
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end).with_message(format!(
                         "records have different fields: `{}` vs `{}`",
-                        t1, t2
+                        TypeDisplay::new(t1, name_table),
+                        TypeDisplay::new(t2, name_table)
                     )),
                 ])
                 .with_notes(vec![
@@ -148,7 +150,7 @@ pub fn report_type_errors(
                 .with_message("field access on non-record type")
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("cannot access field on type `{}`", ty)),
+                        .with_message(format!("cannot access field on type `{}`", TypeDisplay::new(ty, name_table))),
                 ])
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),

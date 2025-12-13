@@ -2,6 +2,7 @@ use crate::analysis::resolver::{
     TypeName, Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
     ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
 };
+use crate::analysis::name_table::NameTable;
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE,
 };
@@ -38,17 +39,40 @@ pub enum Type {
     Record(BTreeMap<String, Rc<Type>>),
 }
 
-impl fmt::Display for Type {
+pub struct TypeDisplay<'a> {
+    pub ty: &'a Type,
+    pub name_table: &'a NameTable,
+}
+
+impl<'a> TypeDisplay<'a> {
+    pub fn new(ty: &'a Type, name_table: &'a NameTable) -> Self {
+        Self { ty, name_table }
+    }
+}
+
+impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match self.ty {
             Type::Var(id) => write!(f, "{}", id),
-            Type::Star(id) => write!(f, "@{}", id.0),
-            Type::App(lhs, rhs) => write!(f, "{}[{}]", lhs, rhs),
-            Type::Pair(a, b) => write!(f, "({} * {})", a, b),
-            Type::Function(arg, ret) => match arg.as_ref() {
-                Type::Function(_, _) => write!(f, "({}) -> {}", arg, ret),
-                _ => write!(f, "{} -> {}", arg, ret),
-            },
+            Type::Star(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
+            Type::App(lhs, rhs) => {
+                let lhs_display = TypeDisplay::new(lhs, self.name_table);
+                let rhs_display = TypeDisplay::new(rhs, self.name_table);
+                write!(f, "{}[{}]", lhs_display, rhs_display)
+            }
+            Type::Pair(a, b) => {
+                let a_display = TypeDisplay::new(a, self.name_table);
+                let b_display = TypeDisplay::new(b, self.name_table);
+                write!(f, "({} * {})", a_display, b_display)
+            }
+            Type::Function(arg, ret) => {
+                let arg_display = TypeDisplay::new(arg, self.name_table);
+                let ret_display = TypeDisplay::new(ret, self.name_table);
+                match arg.as_ref() {
+                    Type::Function(_, _) => write!(f, "({}) -> {}", arg_display, ret_display),
+                    _ => write!(f, "{} -> {}", arg_display, ret_display),
+                }
+            }
             Type::Record(fields) => {
                 write!(f, "{{ ")?;
                 let mut first = true;
@@ -56,7 +80,8 @@ impl fmt::Display for Type {
                     if !first {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", name, ty)?;
+                    let ty_display = TypeDisplay::new(ty, self.name_table);
+                    write!(f, "{}: {}", name, ty_display)?;
                     first = false;
                 }
                 write!(f, " }}")
@@ -154,10 +179,10 @@ pub struct Inferrer {
 
 #[derive(Debug, Error)]
 pub enum TypeError {
-    #[error("type mismatch: expected {0}, found {1}")]
+    #[error("type mismatch: expected {0:?}, found {1:?}")]
     Mismatch(Rc<Type>, Rc<Type>, Span),
 
-    #[error("occurs check failed: type variable {0} occurs in {1}")]
+    #[error("occurs check failed: type variable {0} occurs in {1:?}")]
     OccursCheck(TypeID, Rc<Type>, Span),
 
     #[error("unbound variable: {0}")]
@@ -166,7 +191,7 @@ pub enum TypeError {
     #[error("record field mismatch: records have different fields")]
     RecordFieldMismatch(Rc<Type>, Rc<Type>, Span),
 
-    #[error("field access on non-record type: {0}")]
+    #[error("field access on non-record type: {0:?}")]
     FieldAccessOnNonRecord(Rc<Type>, Span),
 
     #[error("algebraic data type not found")]
