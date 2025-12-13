@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
-use crate::analysis::resolver::{DefID, Name};
+use crate::analysis::resolver::{TypeName, Name};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::HashMap;
@@ -35,8 +35,8 @@ pub enum Value {
     /// A built-in function implemented in Rust.
     Builtin(BuiltinFn),
     Record(HashMap<String, Value>),
-    Constructor(DefID, Name),
-    Adt(Rc<Value>, DefID, Name),
+    Constructor(TypeName, Name),
+    Adt(Rc<Value>, TypeName, Name),
 }
 
 impl fmt::Debug for Value {

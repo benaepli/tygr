@@ -1,5 +1,5 @@
 use crate::analysis::resolver::{
-    DefID, Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
+    TypeName, Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
     ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
 };
 use crate::builtin::{
@@ -30,7 +30,7 @@ pub struct TypeScheme {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Var(TypeID),
-    Star(DefID),
+    Star(TypeName),
     App(Rc<Type>, Rc<Type>),
 
     Function(Rc<Type>, Rc<Type>),
@@ -80,7 +80,7 @@ pub enum TypedPatternKind {
     Wildcard,
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
-    Constructor(DefID, Name, Box<TypedPattern>),
+    Constructor(TypeName, Name, Box<TypedPattern>),
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +130,7 @@ pub enum TypedKind {
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
-    Constructor(DefID, Name),
+    Constructor(TypeName, Name),
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +141,7 @@ pub struct TypedAdt {
 
 type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
-type TypeContext = HashMap<DefID, Rc<Type>>;
+type TypeContext = HashMap<TypeName, Rc<Type>>;
 
 pub struct Inferrer {
     substitution: Substitution,
@@ -149,7 +149,7 @@ pub struct Inferrer {
 
     type_ctx: TypeContext,
 
-    adts: HashMap<DefID, TypedAdt>,
+    adts: HashMap<TypeName, TypedAdt>,
 }
 
 #[derive(Debug, Error)]
@@ -170,10 +170,10 @@ pub enum TypeError {
     FieldAccessOnNonRecord(Rc<Type>, Span),
 
     #[error("algebraic data type not found")]
-    AdtNotFound(DefID, Span),
+    AdtNotFound(TypeName, Span),
 
     #[error("constructor not found in type")]
-    ConstructorNotFound(DefID, Name, Span),
+    ConstructorNotFound(TypeName, Name, Span),
 
     #[error("invalid constructor type (expected function type)")]
     InvalidConstructorType(Span),

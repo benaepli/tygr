@@ -154,7 +154,7 @@ pub fn report_type_errors(
                     "field access is only allowed on record types".to_string(),
                 ]),
             TypeError::AdtNotFound(adt_id, span) => {
-                let type_name = name_table.lookup_defid(adt_id);
+                let type_name = name_table.lookup_type_name(adt_id);
                 Diagnostic::error()
                     .with_message("algebraic data type not found")
                     .with_labels(vec![
@@ -166,7 +166,7 @@ pub fn report_type_errors(
                     ])
             }
             TypeError::ConstructorNotFound(adt_id, ctor_id, span) => {
-                let adt_name = name_table.lookup_defid(adt_id);
+                let adt_name = name_table.lookup_type_name(adt_id);
                 let ctor_name = name_table.lookup_name(ctor_id);
                 Diagnostic::error()
                     .with_message("constructor not found in type")

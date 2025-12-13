@@ -16,9 +16,9 @@ impl fmt::Display for Name {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DefID(pub usize);
+pub struct TypeName(pub usize);
 
-impl fmt::Display for DefID {
+impl fmt::Display for TypeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -32,8 +32,8 @@ pub struct ResolvedConstructor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedAdt {
-    pub name: DefID,
-    pub type_params: Vec<DefID>,
+    pub name: TypeName,
+    pub type_params: Vec<TypeName>,
     pub constructors: HashMap<Name, ResolvedConstructor>,
     pub span: Span,
 }
@@ -46,7 +46,7 @@ pub enum ResolvedPatternKind {
     Wildcard,
     Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     EmptyList,
-    Constructor(DefID, Name, Box<ResolvedPattern>),
+    Constructor(TypeName, Name, Box<ResolvedPattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,7 +82,7 @@ impl Resolved {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedAnnotationKind {
-    Var(DefID),
+    Var(TypeName),
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
@@ -116,7 +116,7 @@ pub enum ResolvedKind {
         value: Box<Resolved>,
         body: Box<Resolved>,
         value_type: Option<ResolvedAnnotation>,
-        type_params: Vec<DefID>,
+        type_params: Vec<TypeName>,
     },
     Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
@@ -136,7 +136,7 @@ pub enum ResolvedKind {
     FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
-    Constructor(DefID, Name),
+    Constructor(TypeName, Name),
 }
 
 #[derive(Error, Debug, PartialEq, Clone)]
@@ -160,11 +160,11 @@ pub enum ResolutionError {
 }
 
 type Scope = HashMap<String, Name>;
-type TypeScope = HashMap<String, DefID>;
+type TypeScope = HashMap<String, TypeName>;
 
 #[derive(Debug, Clone)]
 struct TypeAliasEntry {
-    generics: Vec<DefID>,
+    generics: Vec<TypeName>,
     body: ResolvedAnnotation,
 }
 
@@ -173,8 +173,8 @@ enum Partial {
     Alias {
         name: String,
         body: ResolvedAnnotation,
-        pending: Vec<DefID>,
-        subs: HashMap<DefID, ResolvedAnnotation>,
+        pending: Vec<TypeName>,
+        subs: HashMap<TypeName, ResolvedAnnotation>,
         total: usize,
     },
 }
@@ -204,16 +204,16 @@ pub struct Resolver {
     builtins: HashMap<Name, BuiltinFn>,
 
     type_scopes: Vec<TypeScope>,
-    next_type: DefID,
+    next_type: TypeName,
 
     type_aliases: HashMap<String, TypeAliasEntry>,
 
-    adts: HashMap<String, DefID>,
-    constructors: HashMap<String, (DefID, Name)>,
+    adts: HashMap<String, TypeName>,
+    constructors: HashMap<String, (TypeName, Name)>,
 
     // Name preservation for error messages
     name_origins: HashMap<Name, String>,
-    defid_origins: HashMap<DefID, String>,
+    type_name_origins: HashMap<TypeName, String>,
 }
 
 impl Resolver {
@@ -232,12 +232,12 @@ impl Resolver {
             constructors: HashMap::new(),
 
             name_origins: HashMap::new(),
-            defid_origins: HashMap::new(),
+            type_name_origins: HashMap::new(),
         };
 
         // Store builtin type names
-        for (type_name, defid) in BUILTIN_TYPES.entries() {
-            resolver.defid_origins.insert(*defid, type_name.to_string());
+        for (type_name_str, type_name_id) in BUILTIN_TYPES.entries() {
+            resolver.type_name_origins.insert(*type_name_id, type_name_str.to_string());
         }
 
         let mut global = Scope::new();
@@ -254,7 +254,7 @@ impl Resolver {
     fn instantiate_alias(
         &self,
         template: &ResolvedAnnotation,
-        substitutions: &HashMap<DefID, ResolvedAnnotation>,
+        substitutions: &HashMap<TypeName, ResolvedAnnotation>,
     ) -> ResolvedAnnotation {
         let span = template.span;
         let kind = match &template.kind {
@@ -291,9 +291,9 @@ impl Resolver {
         id
     }
 
-    fn new_id(&mut self) -> DefID {
+    fn new_id(&mut self) -> TypeName {
         let id = self.next_type;
-        self.next_type = DefID(self.next_type.0 + 1);
+        self.next_type = TypeName(self.next_type.0 + 1);
         id
     }
 
@@ -437,7 +437,7 @@ impl Resolver {
         }
         let def_id = self.new_id();
         self.adts.insert(adt.name.clone(), def_id);
-        self.defid_origins.insert(def_id, adt.name.clone());
+        self.type_name_origins.insert(def_id, adt.name.clone());
 
         let mut constructors = HashMap::new();
 
@@ -446,7 +446,7 @@ impl Resolver {
 
         for generic in adt.generics.clone() {
             let id = self.new_id();
-            self.defid_origins.insert(id, generic.name.clone());
+            self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
         }
@@ -806,6 +806,6 @@ impl Resolver {
     /// This consumes the resolver's name origin maps and returns them as a NameTable
     /// for use in error formatting and debugging.
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
-        crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.defid_origins)
+        crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.type_name_origins)
     }
 }

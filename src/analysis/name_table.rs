@@ -1,4 +1,4 @@
-use crate::analysis::resolver::{DefID, Name};
+use crate::analysis::resolver::{TypeName, Name};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -7,18 +7,18 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct NameTable {
     name_to_string: Arc<HashMap<Name, String>>,
-    defid_to_string: Arc<HashMap<DefID, String>>,
+    type_name_to_string: Arc<HashMap<TypeName, String>>,
 }
 
 impl NameTable {
     /// Create a NameTable from pre-populated maps
     pub fn with_maps(
         name_map: HashMap<Name, String>,
-        defid_map: HashMap<DefID, String>,
+        type_name_map: HashMap<TypeName, String>,
     ) -> Self {
         NameTable {
             name_to_string: Arc::new(name_map),
-            defid_to_string: Arc::new(defid_map),
+            type_name_to_string: Arc::new(type_name_map),
         }
     }
 
@@ -31,12 +31,12 @@ impl NameTable {
             .unwrap_or_else(|| format!("<name:{}>", name.0))
     }
 
-    /// Look up the original name for a DefID.
+    /// Look up the original name for a TypeName.
     /// Returns a fallback string if not found.
-    pub fn lookup_defid(&self, defid: &DefID) -> String {
-        self.defid_to_string
-            .get(defid)
+    pub fn lookup_type_name(&self, type_name: &TypeName) -> String {
+        self.type_name_to_string
+            .get(type_name)
             .cloned()
-            .unwrap_or_else(|| format!("<type:{}>", defid.0))
+            .unwrap_or_else(|| format!("<type:{}>", type_name.0))
     }
 }

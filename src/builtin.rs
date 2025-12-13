@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Type, TypeScheme};
-use crate::analysis::resolver::DefID;
+use crate::analysis::resolver::TypeName;
 use phf::Map;
 use phf_macros::phf_map;
 use std::rc::Rc;
@@ -102,14 +102,14 @@ fn func(a: Type, b: Type) -> Type {
     Type::Function(Rc::new(a), Rc::new(b))
 }
 
-pub static INT_TYPE: DefID = DefID(0);
-pub static FLOAT_TYPE: DefID = DefID(1);
-pub static BOOL_TYPE: DefID = DefID(2);
-pub static STRING_TYPE: DefID = DefID(3);
-pub static UNIT_TYPE: DefID = DefID(4);
-pub static LIST_TYPE: DefID = DefID(5);
+pub static INT_TYPE: TypeName = TypeName(0);
+pub static FLOAT_TYPE: TypeName = TypeName(1);
+pub static BOOL_TYPE: TypeName = TypeName(2);
+pub static STRING_TYPE: TypeName = TypeName(3);
+pub static UNIT_TYPE: TypeName = TypeName(4);
+pub static LIST_TYPE: TypeName = TypeName(5);
 
-pub static BUILTIN_TYPES: Map<&'static str, DefID> = phf_map! {
+pub static BUILTIN_TYPES: Map<&'static str, TypeName> = phf_map! {
     "int" => INT_TYPE,
     "float" => FLOAT_TYPE,
     "bool" => BOOL_TYPE,
@@ -118,7 +118,7 @@ pub static BUILTIN_TYPES: Map<&'static str, DefID> = phf_map! {
     "list" => LIST_TYPE,
 };
 
-pub static TYPE_BASE: DefID = DefID(BUILTIN_TYPES.len());
+pub static TYPE_BASE: TypeName = TypeName(BUILTIN_TYPES.len());
 
 impl BuiltinFn {
     pub fn type_scheme(&self) -> TypeScheme {
