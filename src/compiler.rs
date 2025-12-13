@@ -79,6 +79,9 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         Ok(r) => r,
     };
 
+    // Extract the name table for error reporting
+    let name_table = resolver.into_name_table();
+
     let mut inferrer = Inferrer::new();
     for adt in resolved_adts {
         inferrer.register_adt(adt);
@@ -86,7 +89,7 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
 
     let typed = match inferrer.infer(resolved) {
         Err(e) => {
-            report_type_errors(input, &[e], name)?;
+            report_type_errors(input, &[e], name, &name_table)?;
             return Err(anyhow!("type inference error"));
         }
         Ok(t) => t,

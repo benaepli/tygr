@@ -210,6 +210,10 @@ pub struct Resolver {
 
     adts: HashMap<String, DefID>,
     constructors: HashMap<String, (DefID, Name)>,
+
+    // Name preservation for error messages
+    name_origins: HashMap<Name, String>,
+    defid_origins: HashMap<DefID, String>,
 }
 
 impl Resolver {
@@ -226,13 +230,22 @@ impl Resolver {
 
             adts: HashMap::new(),
             constructors: HashMap::new(),
+
+            name_origins: HashMap::new(),
+            defid_origins: HashMap::new(),
         };
+
+        // Store builtin type names
+        for (type_name, defid) in BUILTIN_TYPES.entries() {
+            resolver.defid_origins.insert(*defid, type_name.to_string());
+        }
 
         let mut global = Scope::new();
         for (keyword, builtin) in BUILTINS.entries() {
             let name_id = resolver.new_name();
             global.insert(keyword.to_string(), name_id);
             resolver.builtins.insert(name_id, builtin.clone());
+            resolver.name_origins.insert(name_id, keyword.to_string());
         }
         resolver.scopes.push(global);
         resolver
@@ -424,6 +437,7 @@ impl Resolver {
         }
         let def_id = self.new_id();
         self.adts.insert(adt.name.clone(), def_id);
+        self.defid_origins.insert(def_id, adt.name.clone());
 
         let mut constructors = HashMap::new();
 
@@ -432,6 +446,7 @@ impl Resolver {
 
         for generic in adt.generics.clone() {
             let id = self.new_id();
+            self.defid_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
         }
@@ -445,6 +460,7 @@ impl Resolver {
             }
 
             let name_id = self.new_name();
+            self.name_origins.insert(name_id, name.clone());
             constructors.insert(
                 name_id,
                 ResolvedConstructor {
@@ -479,6 +495,7 @@ impl Resolver {
         match pat.kind {
             PatternKind::Var(name) => {
                 let new_id = self.new_name();
+                self.name_origins.insert(new_id, name.clone());
                 if scope.insert(name.clone(), new_id).is_some() {
                     return Err(ResolutionError::DuplicateBinding(name, span));
                 }
@@ -783,5 +800,12 @@ impl Resolver {
                 ))
             }
         }
+    }
+
+    /// Extract the NameTable from this resolver.
+    /// This consumes the resolver's name origin maps and returns them as a NameTable
+    /// for use in error formatting and debugging.
+    pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
+        crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.defid_origins)
     }
 }

@@ -1,5 +1,6 @@
 pub mod format;
 pub mod inference;
+pub mod name_table;
 pub mod resolver;
 
 use crate::parser::{Expr, ExprKind, LetDeclaration, Pattern, PatternKind};

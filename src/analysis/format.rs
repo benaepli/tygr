@@ -1,4 +1,5 @@
 use crate::analysis::inference::TypeError;
+use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::ResolutionError;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFiles;
@@ -99,6 +100,7 @@ pub fn report_type_errors(
     source: &str,
     errors: &[TypeError],
     filename: &str,
+    name_table: &NameTable,
 ) -> Result<(), codespan_reporting::files::Error> {
     let mut files = SimpleFiles::new();
     let file_id = files.add(filename, source);
@@ -122,12 +124,15 @@ pub fn report_type_errors(
                     Label::primary(file_id, span.start..span.end)
                         .with_message(format!("recursive type: `'{}` occurs in `{}`", var, ty)),
                 ]),
-            TypeError::UnboundVariable(name, span) => Diagnostic::error()
-                .with_message(format!("unbound variable `{}`", name))
-                .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end)
-                        .with_message("not found in this scope"),
-                ]),
+            TypeError::UnboundVariable(name, span) => {
+                let display_name = name_table.lookup_name(name);
+                Diagnostic::error()
+                    .with_message(format!("unbound variable `{}`", display_name))
+                    .with_labels(vec![
+                        Label::primary(file_id, span.start..span.end)
+                            .with_message("not found in this scope"),
+                    ])
+            }
             TypeError::RecordFieldMismatch(t1, t2, span) => Diagnostic::error()
                 .with_message("record field mismatch")
                 .with_labels(vec![
@@ -148,24 +153,31 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),
                 ]),
-            TypeError::AdtNotFound(adt_id, span) => Diagnostic::error()
-                .with_message("algebraic data type not found")
-                .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("type `{}` not found in inference context", adt_id)),
-                ])
-                .with_notes(vec![
-                    "this is an internal error - the ADT should have been registered during resolution".to_string(),
-                ]),
-            TypeError::ConstructorNotFound(adt_id, ctor_id, span) => Diagnostic::error()
-                .with_message("constructor not found in type")
-                .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("constructor `{}` not found in type `{}`", ctor_id, adt_id)),
-                ])
-                .with_notes(vec![
-                    "this is an internal error - the constructor should have been registered with the ADT".to_string(),
-                ]),
+            TypeError::AdtNotFound(adt_id, span) => {
+                let type_name = name_table.lookup_defid(adt_id);
+                Diagnostic::error()
+                    .with_message("algebraic data type not found")
+                    .with_labels(vec![
+                        Label::primary(file_id, span.start..span.end)
+                            .with_message(format!("type `{}` not found in inference context", type_name)),
+                    ])
+                    .with_notes(vec![
+                        "this is an internal error - the ADT should have been registered during resolution".to_string(),
+                    ])
+            }
+            TypeError::ConstructorNotFound(adt_id, ctor_id, span) => {
+                let adt_name = name_table.lookup_defid(adt_id);
+                let ctor_name = name_table.lookup_name(ctor_id);
+                Diagnostic::error()
+                    .with_message("constructor not found in type")
+                    .with_labels(vec![
+                        Label::primary(file_id, span.start..span.end)
+                            .with_message(format!("constructor `{}` not found in type `{}`", ctor_name, adt_name)),
+                    ])
+                    .with_notes(vec![
+                        "this is an internal error - the constructor should have been registered with the ADT".to_string(),
+                    ])
+            }
             TypeError::InvalidConstructorType(span) => Diagnostic::error()
                 .with_message("invalid constructor type")
                 .with_labels(vec![
