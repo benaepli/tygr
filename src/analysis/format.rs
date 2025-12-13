@@ -62,6 +62,33 @@ pub fn report_resolution_errors(
                 .with_notes(vec![
                     "each field can only appear once in a record".to_string(),
                 ]),
+            ResolutionError::DuplicateAdt(name, span) => Diagnostic::error()
+                .with_message(format!("algebraic data type `{}` is already defined", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("duplicate ADT definition"),
+                ])
+                .with_notes(vec![
+                    "each algebraic data type can only be defined once".to_string(),
+                ]),
+            ResolutionError::DuplicateConstructor(name, span) => Diagnostic::error()
+                .with_message(format!("constructor `{}` is already defined", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("duplicate constructor"),
+                ])
+                .with_notes(vec![
+                    "constructor names must be unique across all types".to_string(),
+                ]),
+            ResolutionError::ConstructorNotFound(name, span) => Diagnostic::error()
+                .with_message(format!("constructor `{}` not found", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("not found in this scope"),
+                ])
+                .with_notes(vec![
+                    "constructors must be defined before use".to_string(),
+                ]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
@@ -122,6 +149,33 @@ pub fn report_type_errors(
                 ])
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),
+                ]),
+            TypeError::AdtNotFound(adt_id, span) => Diagnostic::error()
+                .with_message("algebraic data type not found")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message(format!("type `{}` not found in inference context", adt_id)),
+                ])
+                .with_notes(vec![
+                    "this is an internal error - the ADT should have been registered during resolution".to_string(),
+                ]),
+            TypeError::ConstructorNotFound(adt_id, ctor_id, span) => Diagnostic::error()
+                .with_message("constructor not found in type")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message(format!("constructor `{}` not found in type `{}`", ctor_id, adt_id)),
+                ])
+                .with_notes(vec![
+                    "this is an internal error - the constructor should have been registered with the ADT".to_string(),
+                ]),
+            TypeError::InvalidConstructorType(span) => Diagnostic::error()
+                .with_message("invalid constructor type")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("expected constructor to have function type"),
+                ])
+                .with_notes(vec![
+                    "constructors must have function types that take an argument and return the ADT".to_string(),
                 ]),
         };
 

@@ -168,6 +168,15 @@ pub enum TypeError {
 
     #[error("field access on non-record type: {0}")]
     FieldAccessOnNonRecord(Rc<Type>, Span),
+
+    #[error("algebraic data type not found")]
+    AdtNotFound(DefID, Span),
+
+    #[error("constructor not found in type")]
+    ConstructorNotFound(DefID, Name, Span),
+
+    #[error("invalid constructor type (expected function type)")]
+    InvalidConstructorType(Span),
 }
 
 impl Inferrer {
@@ -521,15 +530,15 @@ impl Inferrer {
             }),
             ResolvedPatternKind::Constructor(adt_id, ctor_id, pat) => {
                 let Some(adt) = self.adts.get(&adt_id) else {
-                    todo!();
+                    return Err(TypeError::AdtNotFound(adt_id, span));
                 };
                 let Some(ctor_scheme) = adt.schemes.get(&ctor_id).cloned() else {
-                    todo!();
+                    return Err(TypeError::ConstructorNotFound(adt_id, ctor_id, span));
                 };
 
                 let ctor_ty = self.instantiate(&ctor_scheme);
                 let Type::Function(arg_ty, adt_ty) = ctor_ty.as_ref() else {
-                    todo!();
+                    return Err(TypeError::InvalidConstructorType(span));
                 };
 
                 let typed_pat = self.infer_pattern(*pat, new_env)?;
@@ -876,10 +885,10 @@ impl Inferrer {
             }
             ResolvedKind::Constructor(adt_id, ctor_id) => {
                 let Some(adt) = self.adts.get(&adt_id) else {
-                    todo!();
+                    return Err(TypeError::AdtNotFound(adt_id, span));
                 };
                 let Some(ctor) = adt.schemes.get(&ctor_id).cloned() else {
-                    todo!();
+                    return Err(TypeError::ConstructorNotFound(adt_id, ctor_id, span));
                 };
                 let ty = self.instantiate(&ctor);
                 Ok(Typed {

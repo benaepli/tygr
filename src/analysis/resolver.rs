@@ -419,7 +419,7 @@ impl Resolver {
         Ok(())
     }
 
-    fn resolve_adt(&mut self, adt: Adt) -> Result<ResolvedAdt, ResolutionError> {
+    pub fn resolve_adt(&mut self, adt: Adt) -> Result<ResolvedAdt, ResolutionError> {
         if self.adts.contains_key(&adt.name) {
             return Err(ResolutionError::DuplicateAdt(adt.name, adt.span));
         }
@@ -503,7 +503,7 @@ impl Resolver {
             }
             PatternKind::Constructor(name, pat) => {
                 let Some((adt_id, ctor_id)) = self.constructors.get(&name).cloned() else {
-                    todo!();
+                    return Err(ResolutionError::ConstructorNotFound(name, span));
                 };
                 let resolved = self.analyze_pattern(*pat, scope)?;
                 Ok(ResolvedPattern::new(
