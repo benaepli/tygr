@@ -68,9 +68,7 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
                 report_resolution_errors(input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
             }
-            Ok(a) => {
-                resolved_adts.push(a)
-            }
+            Ok(a) => resolved_adts.push(a),
         }
     }
     let resolved = match resolver.resolve(desugared) {
@@ -80,12 +78,12 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         }
         Ok(r) => r,
     };
-    
+
     let mut inferrer = Inferrer::new();
     for adt in resolved_adts {
         inferrer.register_adt(adt);
     }
-    
+
     let typed = match inferrer.infer(resolved) {
         Err(e) => {
             report_type_errors(input, &[e], name)?;

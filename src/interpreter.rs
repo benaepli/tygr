@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
-use crate::analysis::resolver::Name;
+use crate::analysis::resolver::{DefID, Name};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::HashMap;
@@ -35,6 +35,8 @@ pub enum Value {
     /// A built-in function implemented in Rust.
     Builtin(BuiltinFn),
     Record(HashMap<String, Value>),
+    Constructor(DefID, Name),
+    Adt(Rc<Value>, DefID, Name),
 }
 
 impl fmt::Debug for Value {
@@ -61,6 +63,10 @@ impl fmt::Debug for Value {
                     debug_map.entry(&name, value);
                 }
                 debug_map.finish()
+            }
+            Value::Constructor(_def_id, name) => write!(f, "<constructor:{}>", name),
+            Value::Adt(val, _def_id, name) => {
+                f.debug_tuple(&format!("Adt::{}", name)).field(val).finish()
             }
         }
     }
@@ -100,6 +106,14 @@ impl fmt::Display for Value {
                     first = false;
                 }
                 write!(f, " }}")
+            }
+            Value::Constructor(_def_id, name) => write!(f, "<{}>", name),
+            Value::Adt(val, _def_id, name) => {
+                if let Value::Unit = **val {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "{}({})", name, val)
+                }
             }
         }
     }
@@ -216,6 +230,25 @@ fn bind_pattern(
             } else {
                 Err(EvalError::PatternMismatch(format!(
                     "expected list, found {}",
+                    value
+                )))
+            }
+        }
+        TypedPatternKind::Constructor(adt_id, ctor_id, pat) => {
+            if let Value::Adt(v, adt, ctor) = &*value
+                && adt == adt_id
+            {
+                if ctor == ctor_id {
+                    bind_pattern(pat, v.clone(), env)
+                } else {
+                    Err(EvalError::PatternMismatch(format!(
+                        "expected constructor {}, found constructor {}",
+                        ctor_id, ctor
+                    )))
+                }
+            } else {
+                Err(EvalError::PatternMismatch(format!(
+                    "expected ADT constructor pattern, found {}",
                     value
                 )))
             }
@@ -468,6 +501,9 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
                 }))
             }
         }
+        Value::Constructor(adt_id, ctor_id) => {
+            Ok(Rc::new(Value::Adt(arg, adt_id.clone(), ctor_id.clone())))
+        }
         _ => Err(EvalError::NotAFunction),
     }
 }
@@ -581,6 +617,9 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                     record_val
                 ))),
             }
+        }
+        &TypedKind::Constructor(adt_id, ctor_id) => {
+            Ok(Rc::new(Value::Constructor(adt_id, ctor_id)))
         }
     }
 }

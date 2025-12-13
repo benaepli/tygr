@@ -86,9 +86,7 @@ pub fn report_resolution_errors(
                     Label::primary(file_id, span.start..span.end)
                         .with_message("not found in this scope"),
                 ])
-                .with_notes(vec![
-                    "constructors must be defined before use".to_string(),
-                ]),
+                .with_notes(vec!["constructors must be defined before use".to_string()]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;

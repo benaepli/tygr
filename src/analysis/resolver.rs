@@ -1,7 +1,6 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Adt, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Generic, Pattern, PatternKind, Span,
-    TypeAlias,
+    Adt, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -439,7 +438,10 @@ impl Resolver {
         self.type_scopes.push(type_scope);
         for (name, constructor) in adt.constructors.into_iter() {
             if self.constructors.contains_key(&name) {
-                return Err(ResolutionError::DuplicateConstructor(name, constructor.span));
+                return Err(ResolutionError::DuplicateConstructor(
+                    name,
+                    constructor.span,
+                ));
             }
 
             let name_id = self.new_name();
