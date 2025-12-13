@@ -1,5 +1,5 @@
 use crate::analysis::resolver::{
-    DefID, Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
+    DefID, Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
     ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
 };
 use crate::builtin::{
@@ -80,6 +80,7 @@ pub enum TypedPatternKind {
     Wildcard,
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
+    Constructor(DefID, Name, Box<TypedPattern>),
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +130,13 @@ pub enum TypedKind {
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
+    Constructor(DefID, Name),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedAdt {
+    pub schemes: HashMap<Name, TypeScheme>,
+    pub ty: Rc<Type>,
 }
 
 type Environment = HashMap<Name, TypeScheme>;
@@ -140,8 +148,8 @@ pub struct Inferrer {
     next_var: TypeID,
 
     type_ctx: TypeContext,
-    
-    
+
+    adts: HashMap<DefID, TypedAdt>,
 }
 
 #[derive(Debug, Error)]
@@ -169,6 +177,8 @@ impl Inferrer {
             next_var: TypeID(0),
 
             type_ctx: HashMap::new(),
+
+            adts: HashMap::new(),
         }
     }
 
@@ -178,7 +188,7 @@ impl Inferrer {
         Rc::new(Type::Var(TypeID(id)))
     }
 
-    fn instantiate_annotation(&mut self, annot: &ResolvedAnnotation) -> Rc<Type> {
+    fn instantiate_annotation(&self, annot: &ResolvedAnnotation) -> Rc<Type> {
         match &annot.kind {
             ResolvedAnnotationKind::Var(name_id) => {
                 if let Some(ty) = self.type_ctx.get(name_id) {
@@ -209,6 +219,31 @@ impl Inferrer {
                 }
                 Rc::new(Type::Record(field_types))
             }
+        }
+    }
+
+    pub fn register_adt(&mut self, adt: ResolvedAdt) {
+        let mut params = Vec::new();
+        for param_id in adt.type_params {
+            let id = TypeID(self.next_var.0);
+            self.next_var.0 += 1;
+            let ty = Rc::new(Type::Var(id));
+            self.type_ctx.insert(param_id.clone(), ty);
+            params.push(id);
+        }
+
+        let mut schemes = HashMap::new();
+        let ty = Rc::new(Type::Star(adt.name));
+
+        for (name, ctor) in adt.constructors.into_iter() {
+            let instantiated = self.instantiate_annotation(&ctor.annotation);
+            schemes.insert(
+                name,
+                TypeScheme {
+                    vars: params.clone(),
+                    ty: Rc::new(Type::Function(instantiated, ty.clone())),
+                },
+            );
         }
     }
 
@@ -484,6 +519,28 @@ impl Inferrer {
                 ty: Rc::new(Type::App(Rc::new(Type::Star(LIST_TYPE)), self.new_type())),
                 span,
             }),
+            ResolvedPatternKind::Constructor(adt_id, ctor_id, pat) => {
+                let Some(adt) = self.adts.get(&adt_id) else {
+                    todo!();
+                };
+                let Some(ctor_scheme) = adt.schemes.get(&ctor_id).cloned() else {
+                    todo!();
+                };
+
+                let ctor_ty = self.instantiate(&ctor_scheme);
+                let Type::Function(arg_ty, adt_ty) = ctor_ty.as_ref() else {
+                    todo!();
+                };
+
+                let typed_pat = self.infer_pattern(*pat, new_env)?;
+                self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
+
+                Ok(TypedPattern {
+                    kind: TypedPatternKind::Constructor(adt_id, ctor_id, Box::new(typed_pat)),
+                    ty: adt_ty.clone(),
+                    span,
+                })
+            }
         }
     }
 
@@ -813,6 +870,20 @@ impl Inferrer {
 
                 Ok(Typed {
                     kind: TypedKind::Builtin(builtin),
+                    ty,
+                    span,
+                })
+            }
+            ResolvedKind::Constructor(adt_id, ctor_id) => {
+                let Some(adt) = self.adts.get(&adt_id) else {
+                    todo!();
+                };
+                let Some(ctor) = adt.schemes.get(&ctor_id).cloned() else {
+                    todo!();
+                };
+                let ty = self.instantiate(&ctor);
+                Ok(Typed {
+                    kind: TypedKind::Constructor(adt_id, ctor_id),
                     ty,
                     span,
                 })

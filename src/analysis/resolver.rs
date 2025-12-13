@@ -34,7 +34,7 @@ pub struct ResolvedConstructor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedAdt {
     pub name: DefID,
-    pub generics: Vec<Generic>,
+    pub type_params: Vec<DefID>,
     pub constructors: HashMap<Name, ResolvedConstructor>,
     pub span: Span,
 }
@@ -47,6 +47,7 @@ pub enum ResolvedPatternKind {
     Wildcard,
     Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     EmptyList,
+    Constructor(DefID, Name, Box<ResolvedPattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +152,12 @@ pub enum ResolutionError {
     WrongNumberOfTypeArguments(String, usize, usize, Span),
     #[error("field `{0}` appears more than once in record")]
     DuplicateRecordField(String, Span),
+    #[error("algebraic data type `{0}` is already defined")]
+    DuplicateAdt(String, Span),
+    #[error("constructor `{0}` is already defined")]
+    DuplicateConstructor(String, Span),
+    #[error("constructor `{0}` not found")]
+    ConstructorNotFound(String, Span),
 }
 
 type Scope = HashMap<String, Name>;
@@ -414,10 +421,10 @@ impl Resolver {
 
     fn resolve_adt(&mut self, adt: Adt) -> Result<ResolvedAdt, ResolutionError> {
         if self.adts.contains_key(&adt.name) {
-            // TODO
+            return Err(ResolutionError::DuplicateAdt(adt.name, adt.span));
         }
         let def_id = self.new_id();
-        self.adts.insert(adt.name, def_id);
+        self.adts.insert(adt.name.clone(), def_id);
 
         let mut constructors = HashMap::new();
 
@@ -432,7 +439,7 @@ impl Resolver {
         self.type_scopes.push(type_scope);
         for (name, constructor) in adt.constructors.into_iter() {
             if self.constructors.contains_key(&name) {
-                // TODO
+                return Err(ResolutionError::DuplicateConstructor(name, constructor.span));
             }
 
             let name_id = self.new_name();
@@ -450,7 +457,7 @@ impl Resolver {
         self.type_scopes.pop();
         Ok(ResolvedAdt {
             name: def_id,
-            generics: adt.generics,
+            type_params: generic_ids,
             constructors,
             span: adt.span,
         })
@@ -494,7 +501,16 @@ impl Resolver {
             PatternKind::EmptyList => {
                 Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span))
             }
-            PatternKind::Constructor(_, _) => todo!(),
+            PatternKind::Constructor(name, pat) => {
+                let Some((adt_id, ctor_id)) = self.constructors.get(&name).cloned() else {
+                    todo!();
+                };
+                let resolved = self.analyze_pattern(*pat, scope)?;
+                Ok(ResolvedPattern::new(
+                    ResolvedPatternKind::Constructor(adt_id, ctor_id, Box::new(resolved)),
+                    span,
+                ))
+            }
         }
     }
 
