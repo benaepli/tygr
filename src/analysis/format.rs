@@ -57,10 +57,11 @@ pub fn report_resolution_errors(
             ResolutionError::DuplicateRecordField(name, span) => Diagnostic::error()
                 .with_message(format!("field `{}` appears more than once in record", name))
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end)
-                        .with_message("duplicate field"),
+                    Label::primary(file_id, span.start..span.end).with_message("duplicate field"),
                 ])
-                .with_notes(vec!["each field can only appear once in a record".to_string()]),
+                .with_notes(vec![
+                    "each field can only appear once in a record".to_string(),
+                ]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
@@ -116,12 +117,12 @@ pub fn report_type_errors(
             TypeError::FieldAccessOnNonRecord(ty, span) => Diagnostic::error()
                 .with_message("field access on non-record type")
                 .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end).with_message(format!(
-                        "cannot access field on type `{}`",
-                        ty
-                    )),
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message(format!("cannot access field on type `{}`", ty)),
                 ])
-                .with_notes(vec!["field access is only allowed on record types".to_string()]),
+                .with_notes(vec![
+                    "field access is only allowed on record types".to_string(),
+                ]),
         };
 
         term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;

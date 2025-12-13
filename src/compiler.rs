@@ -3,22 +3,26 @@ use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference::{Inferrer, Typed};
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
-use crate::parser::{Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, parse_program};
+use crate::parser::{
+    Adt, Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, parse_program,
+};
 use crate::{lexer, parser};
 use anyhow::anyhow;
 
-fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<TypeAlias>) {
+fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<Adt>, Vec<TypeAlias>) {
     let mut let_decls = Vec::new();
+    let mut adts = Vec::new();
     let mut type_aliases = Vec::new();
 
     for decl in decls {
         match decl {
             Declaration::Let(l) => let_decls.push(l),
+            Declaration::Adt(a) => adts.push(a),
             Declaration::Type(t) => type_aliases.push(t),
         }
     }
 
-    (let_decls, type_aliases)
+    (let_decls, adts, type_aliases)
 }
 
 pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
@@ -38,7 +42,7 @@ pub fn compile(input: &str, name: &str) -> Result<Typed, anyhow::Error> {
         Some(v) => v,
     };
 
-    let (declarations, aliases) = split_declarations(output);
+    let (declarations, adts, aliases) = split_declarations(output);
     let desugared = desugar(declarations).unwrap_or_else(|| Expr {
         kind: ExprKind::UnitLit,
         span: Span {

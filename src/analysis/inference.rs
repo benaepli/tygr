@@ -140,6 +140,8 @@ pub struct Inferrer {
     next_var: TypeID,
 
     type_ctx: TypeContext,
+    
+    
 }
 
 #[derive(Debug, Error)]

@@ -109,7 +109,7 @@ pub static STRING_TYPE: DefID = DefID(3);
 pub static UNIT_TYPE: DefID = DefID(4);
 pub static LIST_TYPE: DefID = DefID(5);
 
-pub static BUILTINS_TYPES: Map<&'static str, DefID> = phf_map! {
+pub static BUILTIN_TYPES: Map<&'static str, DefID> = phf_map! {
     "int" => INT_TYPE,
     "float" => FLOAT_TYPE,
     "bool" => BOOL_TYPE,
@@ -118,7 +118,7 @@ pub static BUILTINS_TYPES: Map<&'static str, DefID> = phf_map! {
     "list" => LIST_TYPE,
 };
 
-pub static TYPE_BASE: DefID = DefID(BUILTINS_TYPES.len());
+pub static TYPE_BASE: DefID = DefID(BUILTIN_TYPES.len());
 
 impl BuiltinFn {
     pub fn type_scheme(&self) -> TypeScheme {

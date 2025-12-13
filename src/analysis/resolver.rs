@@ -1,6 +1,7 @@
-use crate::builtin::{BUILTINS, BUILTINS_TYPES, BuiltinFn, TYPE_BASE};
+use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
+    Adt, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Generic, Pattern, PatternKind, Span,
+    TypeAlias,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -22,6 +23,20 @@ impl fmt::Display for DefID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedConstructor {
+    pub annotation: ResolvedAnnotation,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedAdt {
+    pub name: DefID,
+    pub generics: Vec<Generic>,
+    pub constructors: HashMap<Name, ResolvedConstructor>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +136,7 @@ pub enum ResolvedKind {
     FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
+    Constructor(DefID, Name),
 }
 
 #[derive(Error, Debug, PartialEq, Clone)]
@@ -185,6 +201,9 @@ pub struct Resolver {
     next_type: DefID,
 
     type_aliases: HashMap<String, TypeAliasEntry>,
+
+    adts: HashMap<String, DefID>,
+    constructors: HashMap<String, (DefID, Name)>,
 }
 
 impl Resolver {
@@ -198,6 +217,9 @@ impl Resolver {
             next_type: TYPE_BASE,
 
             type_aliases: HashMap::new(),
+
+            adts: HashMap::new(),
+            constructors: HashMap::new(),
         };
 
         let mut global = Scope::new();
@@ -270,7 +292,7 @@ impl Resolver {
                     }
                 }
 
-                if let Some(id) = BUILTINS_TYPES.get(&name) {
+                if let Some(id) = BUILTIN_TYPES.get(&name) {
                     Ok(Partial::Done(ResolvedAnnotation::new(
                         ResolvedAnnotationKind::Var(*id),
                         span,
@@ -288,6 +310,11 @@ impl Resolver {
                             total,
                         })
                     }
+                } else if let Some(id) = self.adts.get(&name) {
+                    Ok(Partial::Done(ResolvedAnnotation::new(
+                        ResolvedAnnotationKind::Var(*id),
+                        span,
+                    )))
                 } else {
                     return Err(ResolutionError::VariableNotFound(name, span));
                 }
@@ -385,6 +412,50 @@ impl Resolver {
         Ok(())
     }
 
+    fn resolve_adt(&mut self, adt: Adt) -> Result<ResolvedAdt, ResolutionError> {
+        if self.adts.contains_key(&adt.name) {
+            // TODO
+        }
+        let def_id = self.new_id();
+        self.adts.insert(adt.name, def_id);
+
+        let mut constructors = HashMap::new();
+
+        let mut type_scope = HashMap::new();
+        let mut generic_ids = Vec::new();
+
+        for generic in adt.generics.clone() {
+            let id = self.new_id();
+            type_scope.insert(generic.name, id);
+            generic_ids.push(id);
+        }
+        self.type_scopes.push(type_scope);
+        for (name, constructor) in adt.constructors.into_iter() {
+            if self.constructors.contains_key(&name) {
+                // TODO
+            }
+
+            let name_id = self.new_name();
+            constructors.insert(
+                name_id,
+                ResolvedConstructor {
+                    annotation: self
+                        .resolve_annotation(constructor.annotation)?
+                        .finalize(adt.span)?,
+                    span: constructor.span,
+                },
+            );
+            self.constructors.insert(name, (def_id, name_id));
+        }
+        self.type_scopes.pop();
+        Ok(ResolvedAdt {
+            name: def_id,
+            generics: adt.generics,
+            constructors,
+            span: adt.span,
+        })
+    }
+
     pub fn resolve(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
         let (resolved, _) = self.analyze(expr)?;
         Ok(resolved)
@@ -423,6 +494,7 @@ impl Resolver {
             PatternKind::EmptyList => {
                 Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span))
             }
+            PatternKind::Constructor(_, _) => todo!(),
         }
     }
 
@@ -443,6 +515,12 @@ impl Resolver {
                             return Ok((Resolved::new(ResolvedKind::Var(*id), span), free));
                         }
                     }
+                }
+                if let Some((adt_id, ctor_id)) = self.constructors.get(&name).cloned() {
+                    return Ok((
+                        Resolved::new(ResolvedKind::Constructor(adt_id, ctor_id), span),
+                        HashSet::new(),
+                    ));
                 }
                 Err(ResolutionError::VariableNotFound(name, span))
             }

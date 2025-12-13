@@ -21,6 +21,7 @@ pub enum PatternKind {
     Wildcard,
     Cons(Box<Pattern>, Box<Pattern>),
     EmptyList,
+    Constructor(String, Box<Pattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +72,20 @@ pub struct TypeAlias {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Constructor {
+    pub annotation: Annotation,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adt {
+    pub name: String,
+    pub generics: Vec<Generic>,
+    pub constructors: Vec<(String, Constructor)>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetDeclaration {
     pub pattern: Pattern,
     pub value: Expr,
@@ -82,6 +97,7 @@ pub struct LetDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
     Let(LetDeclaration),
+    Adt(Adt),
     Type(TypeAlias),
 }
 
@@ -99,7 +115,7 @@ pub struct Expr {
 }
 
 impl Expr {
-    fn new(kind: ExprKind, span: Span) -> Self {
+    pub(crate) fn new(kind: ExprKind, span: Span) -> Self {
         Expr { kind, span }
     }
 }
@@ -159,15 +175,6 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     recursive(|pat| {
-        let atom = choice((
-            select! { TokenKind::Identifier(s) => PatternKind::Var(s.clone()) },
-            just(TokenKind::Underscore).to(PatternKind::Wildcard),
-            just(TokenKind::LeftBracket)
-                .then(just(TokenKind::RightBracket))
-                .to(PatternKind::EmptyList),
-        ))
-        .map_with(|kind, e| Pattern::new(kind, e.span()));
-
         let items = pat
             .clone()
             .separated_by(just(TokenKind::Comma))
@@ -186,9 +193,26 @@ where
                 }
             });
 
-        let base = choice((atom, tuple_pat));
+        let ident_pat = select! { TokenKind::Identifier(s) => s }
+            .then(tuple_pat.clone().or_not())
+            .map_with(|(name, arg_opt), e| match arg_opt {
+                Some(arg) => Pattern::new(PatternKind::Constructor(name, Box::new(arg)), e.span()),
+                None => Pattern::new(PatternKind::Var(name), e.span()),
+            });
 
-        let cons_pat = base
+        let atom = choice((
+            ident_pat,
+            just(TokenKind::Underscore)
+                .to(PatternKind::Wildcard)
+                .map_with(|k, e| Pattern::new(k, e.span())),
+            just(TokenKind::LeftBracket)
+                .then(just(TokenKind::RightBracket))
+                .to(PatternKind::EmptyList)
+                .map_with(|k, e| Pattern::new(k, e.span())),
+            tuple_pat,
+        ));
+
+        let cons_pat = atom
             .clone()
             .then(just(TokenKind::Cons).ignore_then(pat).or_not())
             .map_with(|(head, tail_opt), _| match tail_opt {
@@ -581,6 +605,48 @@ where
         })
 }
 
+fn adt<'a, I>() -> impl Parser<'a, I, Adt, extra::Err<Rich<'a, TokenKind>>>
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    let constructor = select! { TokenKind::Identifier(s) => s }
+        .then(
+            annotation()
+                .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen))
+                .or_not(),
+        )
+        .map_with(|(name, annot_opt), extra| {
+            let annotation = annot_opt.unwrap_or_else(|| {
+                Annotation::new(AnnotationKind::Var("unit".to_string()), extra.span())
+            });
+            (
+                name,
+                Constructor {
+                    annotation,
+                    span: extra.span(),
+                },
+            )
+        });
+
+    just(TokenKind::Enum)
+        .ignore_then(select! { TokenKind::Identifier(s) => s })
+        .then(generics())
+        .then_ignore(just(TokenKind::Equal))
+        .then_ignore(just(TokenKind::Pipe).or_not())
+        .then(
+            constructor
+                .separated_by(just(TokenKind::Pipe))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|((name, generics), constructors), extra| Adt {
+            name,
+            generics,
+            constructors,
+            span: extra.span(),
+        })
+}
+
 fn let_declaration<'a, I>() -> impl Parser<'a, I, LetDeclaration, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
@@ -608,6 +674,7 @@ where
 {
     choice((
         type_alias().map(|t| Declaration::Type(t)),
+        adt().map(|a| Declaration::Adt(a)),
         let_declaration().map(|l| Declaration::Let(l)),
     ))
 }
