@@ -126,46 +126,46 @@ impl BuiltinFn {
 
         match self {
             IntAdd | IntSubtract | IntMultiply | IntDivide => mono(func(
-                Type::Star(INT_TYPE),
-                func(Type::Star(INT_TYPE), Type::Star(INT_TYPE)),
+                Type::Con(INT_TYPE),
+                func(Type::Con(INT_TYPE), Type::Con(INT_TYPE)),
             )),
             FloatAdd | FloatSubtract | FloatMultiply | FloatDivide => mono(func(
-                Type::Star(FLOAT_TYPE),
-                func(Type::Star(FLOAT_TYPE), Type::Star(FLOAT_TYPE)),
+                Type::Con(FLOAT_TYPE),
+                func(Type::Con(FLOAT_TYPE), Type::Con(FLOAT_TYPE)),
             )),
 
             IntEqual | IntNotEqual | IntLessEqual | IntGreaterEqual | IntLess | IntGreater => {
                 mono(func(
-                    Type::Star(INT_TYPE),
-                    func(Type::Star(INT_TYPE), Type::Star(BOOL_TYPE)),
+                    Type::Con(INT_TYPE),
+                    func(Type::Con(INT_TYPE), Type::Con(BOOL_TYPE)),
                 ))
             }
             FloatEqual | FloatNotEqual | FloatLessEqual | FloatGreaterEqual | FloatLess
             | FloatGreater => mono(func(
-                Type::Star(FLOAT_TYPE),
-                func(Type::Star(FLOAT_TYPE), Type::Star(BOOL_TYPE)),
+                Type::Con(FLOAT_TYPE),
+                func(Type::Con(FLOAT_TYPE), Type::Con(BOOL_TYPE)),
             )),
             BoolEqual | BoolNotEqual => mono(func(
-                Type::Star(BOOL_TYPE),
-                func(Type::Star(BOOL_TYPE), Type::Star(BOOL_TYPE)),
+                Type::Con(BOOL_TYPE),
+                func(Type::Con(BOOL_TYPE), Type::Con(BOOL_TYPE)),
             )),
 
-            IntNegate => mono(func(Type::Star(INT_TYPE), Type::Star(INT_TYPE))),
-            FloatNegate => mono(func(Type::Star(FLOAT_TYPE), Type::Star(FLOAT_TYPE))),
-            Not => mono(func(Type::Star(BOOL_TYPE), Type::Star(BOOL_TYPE))),
+            IntNegate => mono(func(Type::Con(INT_TYPE), Type::Con(INT_TYPE))),
+            FloatNegate => mono(func(Type::Con(FLOAT_TYPE), Type::Con(FLOAT_TYPE))),
+            Not => mono(func(Type::Con(BOOL_TYPE), Type::Con(BOOL_TYPE))),
 
             StringConcat => mono(func(
-                Type::Star(STRING_TYPE),
-                func(Type::Star(STRING_TYPE), Type::Star(STRING_TYPE)),
+                Type::Con(STRING_TYPE),
+                func(Type::Con(STRING_TYPE), Type::Con(STRING_TYPE)),
             )),
 
-            Print => mono(func(Type::Star(STRING_TYPE), Type::Star(STRING_TYPE))),
-            StringOfFloat => mono(func(Type::Star(FLOAT_TYPE), Type::Star(STRING_TYPE))),
-            StringOfInt => mono(func(Type::Star(INT_TYPE), Type::Star(STRING_TYPE))),
-            FloatOfInt => mono(func(Type::Star(INT_TYPE), Type::Star(FLOAT_TYPE))),
-            Floor => mono(func(Type::Star(FLOAT_TYPE), Type::Star(INT_TYPE))),
-            Ceil => mono(func(Type::Star(FLOAT_TYPE), Type::Star(INT_TYPE))),
-            TimeMicro => mono(func(Type::Star(UNIT_TYPE), Type::Star(INT_TYPE))),
+            Print => mono(func(Type::Con(STRING_TYPE), Type::Con(STRING_TYPE))),
+            StringOfFloat => mono(func(Type::Con(FLOAT_TYPE), Type::Con(STRING_TYPE))),
+            StringOfInt => mono(func(Type::Con(INT_TYPE), Type::Con(STRING_TYPE))),
+            FloatOfInt => mono(func(Type::Con(INT_TYPE), Type::Con(FLOAT_TYPE))),
+            Floor => mono(func(Type::Con(FLOAT_TYPE), Type::Con(INT_TYPE))),
+            Ceil => mono(func(Type::Con(FLOAT_TYPE), Type::Con(INT_TYPE))),
+            TimeMicro => mono(func(Type::Con(UNIT_TYPE), Type::Con(INT_TYPE))),
         }
     }
 }

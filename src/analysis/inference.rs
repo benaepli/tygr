@@ -31,7 +31,7 @@ pub struct TypeScheme {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Var(TypeID),
-    Star(TypeName),
+    Con(TypeName),
     App(Rc<Type>, Rc<Type>),
 
     Function(Rc<Type>, Rc<Type>),
@@ -54,7 +54,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.ty {
             Type::Var(id) => write!(f, "{}", id),
-            Type::Star(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
+            Type::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
             Type::App(lhs, rhs) => {
                 let lhs_display = TypeDisplay::new(lhs, self.name_table);
                 let rhs_display = TypeDisplay::new(rhs, self.name_table);
@@ -228,7 +228,7 @@ impl Inferrer {
                 if let Some(ty) = self.type_ctx.get(name_id) {
                     ty.clone()
                 } else {
-                    Rc::new(Type::Star(*name_id))
+                    Rc::new(Type::Con(*name_id))
                 }
             }
             ResolvedAnnotationKind::App(lhs, rhs) => {
@@ -267,7 +267,7 @@ impl Inferrer {
         }
 
         let mut schemes = HashMap::new();
-        let ty = Rc::new(Type::Star(adt.name));
+        let ty = Rc::new(Type::Con(adt.name));
 
         for (name, ctor) in adt.constructors.into_iter() {
             let instantiated = self.instantiate_annotation(&ctor.annotation);
@@ -314,7 +314,7 @@ impl Inferrer {
                 }
                 Rc::new(Type::Record(new_fields))
             }
-            Type::Star(_) => ty.clone(),
+            Type::Con(_) => ty.clone(),
         }
     }
 
@@ -361,7 +361,7 @@ impl Inferrer {
                 }
                 Rc::new(Type::Record(new_fields))
             }
-            Type::Star(_) => ty.clone(),
+            Type::Con(_) => ty.clone(),
         }
     }
 
@@ -373,7 +373,7 @@ impl Inferrer {
             Type::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
             Type::App(lhs, rhs) => self.occurs(id, lhs) || self.occurs(id, rhs),
             Type::Record(fields) => fields.values().any(|ty| self.occurs(id, ty)),
-            Type::Star(_) => false,
+            Type::Con(_) => false,
         }
     }
 
@@ -386,7 +386,7 @@ impl Inferrer {
             (Type::Var(id), _) => self.unify_var(*id, &t2, span),
             (_, Type::Var(id)) => self.unify_var(*id, &t1, span),
 
-            (Type::Star(n1), Type::Star(n2)) if n1 == n2 => Ok(()),
+            (Type::Con(n1), Type::Con(n2)) if n1 == n2 => Ok(()),
 
             (Type::App(l1, r1), Type::App(l2, r2)) => {
                 self.unify(l1, l2, span)?;
@@ -459,7 +459,7 @@ impl Inferrer {
                 }
                 set
             }
-            Type::Star(_) => HashSet::new(),
+            Type::Con(_) => HashSet::new(),
         }
     }
 
@@ -521,7 +521,7 @@ impl Inferrer {
             }),
             ResolvedPatternKind::Unit => Ok(TypedPattern {
                 kind: TypedPatternKind::Unit,
-                ty: Rc::new(Type::Star(UNIT_TYPE)),
+                ty: Rc::new(Type::Con(UNIT_TYPE)),
                 span,
             }),
             ResolvedPatternKind::Pair(p1, p2) => {
@@ -539,7 +539,7 @@ impl Inferrer {
                 let typed_p2 = self.infer_pattern(*p2, new_env)?;
 
                 let elem_ty = self.new_type();
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Star(LIST_TYPE)), elem_ty.clone()));
+                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), elem_ty.clone()));
 
                 self.unify(&typed_p1.ty, &elem_ty, typed_p1.span)?;
                 self.unify(&typed_p2.ty, &list_ty, typed_p2.span)?;
@@ -552,7 +552,7 @@ impl Inferrer {
             }
             ResolvedPatternKind::EmptyList => Ok(TypedPattern {
                 kind: TypedPatternKind::EmptyList,
-                ty: Rc::new(Type::App(Rc::new(Type::Star(LIST_TYPE)), self.new_type())),
+                ty: Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), self.new_type())),
                 span,
             }),
             ResolvedPatternKind::Constructor(adt_id, ctor_id, pat) => {
@@ -585,27 +585,27 @@ impl Inferrer {
         match expr.kind {
             ResolvedKind::IntLit(i) => Ok(Typed {
                 kind: TypedKind::IntLit(i),
-                ty: Rc::new(Type::Star(INT_TYPE)),
+                ty: Rc::new(Type::Con(INT_TYPE)),
                 span,
             }),
             ResolvedKind::FloatLit(f) => Ok(Typed {
                 kind: TypedKind::FloatLit(f),
-                ty: Rc::new(Type::Star(FLOAT_TYPE)),
+                ty: Rc::new(Type::Con(FLOAT_TYPE)),
                 span,
             }),
             ResolvedKind::BoolLit(b) => Ok(Typed {
                 kind: TypedKind::BoolLit(b),
-                ty: Rc::new(Type::Star(BOOL_TYPE)),
+                ty: Rc::new(Type::Con(BOOL_TYPE)),
                 span,
             }),
             ResolvedKind::StringLit(s) => Ok(Typed {
                 kind: TypedKind::StringLit(s),
-                ty: Rc::new(Type::Star(STRING_TYPE)),
+                ty: Rc::new(Type::Con(STRING_TYPE)),
                 span,
             }),
             ResolvedKind::UnitLit => Ok(Typed {
                 kind: TypedKind::UnitLit,
-                ty: Rc::new(Type::Star(UNIT_TYPE)),
+                ty: Rc::new(Type::Con(UNIT_TYPE)),
                 span,
             }),
             ResolvedKind::PairLit(first, second) => {
@@ -748,7 +748,7 @@ impl Inferrer {
                 let typed_cond = self.infer_type(env, *condition)?;
                 self.unify(
                     &typed_cond.ty,
-                    &Rc::new(Type::Star(BOOL_TYPE)),
+                    &Rc::new(Type::Con(BOOL_TYPE)),
                     typed_cond.span,
                 )?;
 
@@ -813,7 +813,7 @@ impl Inferrer {
                 let typed_second = self.infer_type(env, *second)?;
 
                 let elem_ty = self.new_type();
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Star(LIST_TYPE)), elem_ty.clone()));
+                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), elem_ty.clone()));
 
                 self.unify(&typed_first.ty, &elem_ty, typed_first.span)?;
                 self.unify(&typed_second.ty, &list_ty, typed_second.span)?;
@@ -826,7 +826,7 @@ impl Inferrer {
             }
 
             ResolvedKind::EmptyListLit => {
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Star(LIST_TYPE)), self.new_type()));
+                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), self.new_type()));
                 Ok(Typed {
                     kind: TypedKind::EmptyListLit,
                     ty: list_ty,
@@ -860,18 +860,18 @@ impl Inferrer {
 
                 self.unify(
                     &typed_left.ty,
-                    &Rc::new(Type::Star(BOOL_TYPE)),
+                    &Rc::new(Type::Con(BOOL_TYPE)),
                     typed_left.span,
                 )?;
                 self.unify(
                     &typed_right.ty,
-                    &Rc::new(Type::Star(BOOL_TYPE)),
+                    &Rc::new(Type::Con(BOOL_TYPE)),
                     typed_right.span,
                 )?;
 
                 Ok(Typed {
                     kind: TypedKind::BinOp(op, Box::new(typed_left), Box::new(typed_right)),
-                    ty: Rc::new(Type::Star(BOOL_TYPE)),
+                    ty: Rc::new(Type::Con(BOOL_TYPE)),
                     span,
                 })
             }
