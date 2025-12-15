@@ -201,8 +201,23 @@ where
                 None => Pattern::new(PatternKind::Var(name), e.span()),
             });
 
+        let record_field = select! { TokenKind::Identifier(s) => s }
+            .then(just(TokenKind::Colon).ignore_then(pat.clone()).or_not())
+            .map_with(|(name, pat_opt), e| match pat_opt {
+                Some(p) => (name, p),
+                None => (name.clone(), Pattern::new(PatternKind::Var(name), e.span())),
+            });
+
+        let record_pat = record_field
+            .separated_by(just(TokenKind::Comma))
+            .allow_trailing()
+            .collect()
+            .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+            .map_with(|fields, e| Pattern::new(PatternKind::Record(fields), e.span()));
+
         let atom = choice((
             ident_pat,
+            record_pat,
             just(TokenKind::Underscore)
                 .to(PatternKind::Wildcard)
                 .map_with(|k, e| Pattern::new(k, e.span())),
