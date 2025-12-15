@@ -1,7 +1,7 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedVariant, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
-    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, TypeName,
+    Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind, ResolvedMatchBranch,
+    ResolvedPattern, ResolvedPatternKind, ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE,
@@ -180,7 +180,7 @@ pub struct Inferrer {
 
 #[derive(Debug, Error)]
 pub enum TypeError {
-    #[error("type mismatch: expected {0:?}, found {1:?}")]
+    #[error("type mismatch: expected {1:?}, found {0:?}")]
     Mismatch(Rc<Type>, Rc<Type>, Span),
 
     #[error("occurs check failed: type variable {0} occurs in {1:?}")]
@@ -257,12 +257,23 @@ impl Inferrer {
         }
     }
 
+    fn apply_wrap(&self, ty: Rc<Type>, types: &[Rc<Type>]) -> Rc<Type> {
+        match types.split_first() {
+            Some((head, tail)) => {
+                self.apply_wrap(Rc::new(Type::App(ty, head.clone())), tail)
+            }
+            None => ty
+        }
+    }
+
     pub fn register_variant(&mut self, variant: ResolvedVariant) {
         let mut params = Vec::new();
+        let mut param_types = Vec::new();
         for param_id in variant.type_params {
             let id = TypeID(self.next_var.0);
             self.next_var.0 += 1;
             let ty = Rc::new(Type::Var(id));
+            param_types.push(ty.clone());
             self.type_ctx.insert(param_id.clone(), ty);
             params.push(id);
         }
@@ -276,12 +287,16 @@ impl Inferrer {
                 name,
                 TypeScheme {
                     vars: params.clone(),
-                    ty: Rc::new(Type::Function(instantiated, ty.clone())),
+                    ty: Rc::new(Type::Function(
+                        instantiated.clone(),
+                        self.apply_wrap(ty.clone(), &param_types),
+                    )),
                 },
             );
         }
 
-        self.variants.insert(variant.name, TypedVariant { schemes, ty });
+        self.variants
+            .insert(variant.name, TypedVariant { schemes, ty });
     }
 
     fn apply_subst(&self, ty: &Rc<Type>) -> Rc<Type> {
@@ -708,7 +723,7 @@ impl Inferrer {
                 let typed_value = self.infer_type(env, *value)?;
                 if let Some(annot) = value_type {
                     let expected_ty = self.instantiate_annotation(&annot);
-                    self.unify(&expected_ty, &typed_value.ty, typed_value.span)?;
+                    self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
                 }
                 let value_ty = self.apply_subst(&typed_value.ty);
 

@@ -110,7 +110,7 @@ pub fn report_type_errors(
 
     for error in errors {
         let diagnostic = match error {
-            TypeError::Mismatch(expected, found, span) => Diagnostic::error()
+            TypeError::Mismatch(found, expected, span) => Diagnostic::error()
                 .with_message("type mismatch")
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end).with_message(format!(

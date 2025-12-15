@@ -5,7 +5,7 @@ enum Option[a] =
 let e = Some(3)
 let Some(e) = e
 
-let e2 = None()
+let e2: Option[int] = None()
 let result = match e2 with
-    | None() => 0
     | Some(a) => a
+    | None() => 0

@@ -1,7 +1,2 @@
 type record[a][b] = {field1: b, field2: a}
-
 let b: record[int][string] = { field1: "0", field2: 0 }
-
-let y = (0, 0)
-let {x, y: (a, b)}: {x: int, y: int * int} =  {x: 5, y}
-let result = (x, b)

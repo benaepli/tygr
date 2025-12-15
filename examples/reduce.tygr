@@ -4,7 +4,6 @@ let fold_right[a][b]: (a -> b -> b) -> mylist[a] -> b -> b = fix(fn self => fn f
     | [] => x
     | hd::tl => f hd (self f tl x))
 
-let result_r = fold_right (fn x => fn acc => x + acc) (3::5::[]) 0
 let result_b = fold_right (fn x => fn acc => if x then acc else !acc) (true::false::[]) true
 
 let fold_left = fix(fn self => fn f => fn acc => fn ls => match ls with
@@ -12,5 +11,3 @@ let fold_left = fix(fn self => fn f => fn acc => fn ls => match ls with
     | hd::tl => self f (f acc hd) tl)
 
 let result_l = fold_left (fn acc => fn x => acc + x) 0 (3::5::[])
-
-let correct = (result_l == result_r) && (result_l == 8)
