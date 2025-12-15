@@ -21,6 +21,7 @@ pub enum PatternKind {
     Wildcard,
     Cons(Box<Pattern>, Box<Pattern>),
     EmptyList,
+    Record(Vec<(String, Pattern)>),
     Constructor(String, Box<Pattern>),
 }
 

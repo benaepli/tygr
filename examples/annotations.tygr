@@ -1,2 +1,2 @@
 let x [a]: int = 5
-let f [a][b]: a -> b -> b = fn x => fn y => y
+let f [a][b]: a -> b -> b = fn x: a => fn y => y

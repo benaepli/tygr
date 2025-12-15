@@ -1,8 +1,8 @@
-use crate::analysis::resolver::{
-    TypeName, Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
-    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
-};
 use crate::analysis::name_table::NameTable;
+use crate::analysis::resolver::{
+    Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
+    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, TypeName,
+};
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE,
 };
@@ -105,6 +105,7 @@ pub enum TypedPatternKind {
     Wildcard,
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
+    Record(BTreeMap<String, TypedPattern>),
     Constructor(TypeName, Name, Box<TypedPattern>),
 }
 
@@ -538,10 +539,10 @@ impl Inferrer {
                 let typed_p1 = self.infer_pattern(*p1, new_env)?;
                 let typed_p2 = self.infer_pattern(*p2, new_env)?;
 
-                let elem_ty = self.new_type();
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), elem_ty.clone()));
-
-                self.unify(&typed_p1.ty, &elem_ty, typed_p1.span)?;
+                let list_ty = Rc::new(Type::App(
+                    Rc::new(Type::Con(LIST_TYPE)),
+                    typed_p1.ty.clone(),
+                ));
                 self.unify(&typed_p2.ty, &list_ty, typed_p2.span)?;
 
                 Ok(TypedPattern {
@@ -555,6 +556,21 @@ impl Inferrer {
                 ty: Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), self.new_type())),
                 span,
             }),
+            ResolvedPatternKind::Record(fields) => {
+                let mut typed = BTreeMap::new();
+                let mut field_types = BTreeMap::new();
+                for (field_name, pattern) in fields {
+                    let typed_field = self.infer_pattern(pattern, new_env)?;
+                    field_types.insert(field_name.clone(), typed_field.ty.clone());
+                    typed.insert(field_name, typed_field);
+                }
+                let record_ty = Rc::new(Type::Record(field_types));
+                Ok(TypedPattern {
+                    kind: TypedPatternKind::Record(typed),
+                    ty: record_ty,
+                    span,
+                })
+            }
             ResolvedPatternKind::Constructor(adt_id, ctor_id, pat) => {
                 let Some(adt) = self.adts.get(&adt_id) else {
                     return Err(TypeError::AdtNotFound(adt_id, span));
@@ -812,10 +828,11 @@ impl Inferrer {
                 let typed_first = self.infer_type(env, *first)?;
                 let typed_second = self.infer_type(env, *second)?;
 
-                let elem_ty = self.new_type();
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), elem_ty.clone()));
+                let list_ty = Rc::new(Type::App(
+                    Rc::new(Type::Con(LIST_TYPE)),
+                    typed_first.ty.clone(),
+                ));
 
-                self.unify(&typed_first.ty, &elem_ty, typed_first.span)?;
                 self.unify(&typed_second.ty, &list_ty, typed_second.span)?;
 
                 Ok(Typed {

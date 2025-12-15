@@ -1,6 +1,6 @@
 use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{TypeName, Name};
+use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::HashMap;
@@ -132,7 +132,12 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
                 if let Value::Unit = **val {
                     write!(f, "{}", ctor_name)
                 } else {
-                    write!(f, "{}({})", ctor_name, ValueDisplay::new(val, self.name_table))
+                    write!(
+                        f,
+                        "{}({})",
+                        ctor_name,
+                        ValueDisplay::new(val, self.name_table)
+                    )
                 }
             }
         }
@@ -250,6 +255,29 @@ fn bind_pattern(
             } else {
                 Err(EvalError::PatternMismatch(format!(
                     "expected list, found {:?}",
+                    value
+                )))
+            }
+        }
+        TypedPatternKind::Record(fields) => {
+            if let Value::Record(values) = &*value {
+                for (name, pat) in fields {
+                    match values.get(name) {
+                        Some(val) => {
+                            bind_pattern(pat, Rc::new(val.clone()), env)?;
+                        }
+                        None => {
+                            return Err(EvalError::PatternMismatch(format!(
+                                "field '{}' not found in record",
+                                name
+                            )));
+                        }
+                    }
+                }
+                Ok(())
+            } else {
+                Err(EvalError::PatternMismatch(format!(
+                    "expected record, found {:?}",
                     value
                 )))
             }

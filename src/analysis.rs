@@ -22,6 +22,13 @@ fn pattern_to_expr(pattern: &Pattern) -> Expr {
             ExprKind::Cons(e1, e2)
         }
         PatternKind::EmptyList => ExprKind::EmptyListLit,
+        PatternKind::Record(fields) => {
+            let expr_fields = fields
+                .iter()
+                .map(|(name, pat)| (name.clone(), pattern_to_expr(pat)))
+                .collect();
+            ExprKind::RecordLit(expr_fields)
+        }
         PatternKind::Constructor(name, e) => ExprKind::App(
             Box::new(Expr::new(ExprKind::Var(name.clone()), pattern.span)),
             Box::new(pattern_to_expr(e)),

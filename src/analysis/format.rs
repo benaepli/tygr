@@ -1,4 +1,4 @@
-use crate::analysis::inference::{TypeError, TypeDisplay};
+use crate::analysis::inference::{TypeDisplay, TypeError};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::ResolutionError;
 use codespan_reporting::diagnostic::{Diagnostic, Label};

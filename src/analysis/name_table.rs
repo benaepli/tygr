@@ -1,4 +1,4 @@
-use crate::analysis::resolver::{TypeName, Name};
+use crate::analysis::resolver::{Name, TypeName};
 use std::collections::HashMap;
 use std::sync::Arc;
 

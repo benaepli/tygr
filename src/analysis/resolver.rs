@@ -46,6 +46,7 @@ pub enum ResolvedPatternKind {
     Wildcard,
     Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     EmptyList,
+    Record(HashMap<String, ResolvedPattern>),
     Constructor(TypeName, Name, Box<ResolvedPattern>),
 }
 
@@ -237,7 +238,9 @@ impl Resolver {
 
         // Store builtin type names
         for (type_name_str, type_name_id) in BUILTIN_TYPES.entries() {
-            resolver.type_name_origins.insert(*type_name_id, type_name_str.to_string());
+            resolver
+                .type_name_origins
+                .insert(*type_name_id, type_name_str.to_string());
         }
 
         let mut global = Scope::new();
@@ -527,6 +530,19 @@ impl Resolver {
                 let resolved = self.analyze_pattern(*pat, scope)?;
                 Ok(ResolvedPattern::new(
                     ResolvedPatternKind::Constructor(adt_id, ctor_id, Box::new(resolved)),
+                    span,
+                ))
+            }
+            PatternKind::Record(fields) => {
+                let mut resolved = HashMap::new();
+                for (field_name, field_pattern) in fields {
+                    if resolved.contains_key(&field_name) {
+                        return Err(ResolutionError::DuplicateRecordField(field_name.clone(), span));
+                    }
+                    resolved.insert(field_name, self.analyze_pattern(field_pattern, scope)?);
+                }
+                Ok(ResolvedPattern::new(
+                    ResolvedPatternKind::Record(resolved),
                     span,
                 ))
             }

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use tygr::compiler::compile;
-use tygr::interpreter::{run, ValueDisplay};
+use tygr::interpreter::{ValueDisplay, run};
 
 /// A custom interpreter for a simple language
 #[derive(Parser, Debug)]
@@ -35,7 +35,10 @@ fn main() {
     };
 
     match run(&typed) {
-        Ok(result) => println!("Program result: {}", ValueDisplay::new(&result, &name_table)),
+        Ok(result) => println!(
+            "Program result: {}",
+            ValueDisplay::new(&result, &name_table)
+        ),
         Err(e) => {
             eprintln!("Runtime error: {}", e);
             process::exit(1);
