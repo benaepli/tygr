@@ -63,14 +63,14 @@ pub fn report_resolution_errors(
                 .with_notes(vec![
                     "each field can only appear once in a record".to_string(),
                 ]),
-            ResolutionError::DuplicateAdt(name, span) => Diagnostic::error()
-                .with_message(format!("algebraic data type `{}` is already defined", name))
+            ResolutionError::DuplicateVariant(name, span) => Diagnostic::error()
+                .with_message(format!("variant type `{}` is already defined", name))
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end)
-                        .with_message("duplicate ADT definition"),
+                        .with_message("duplicate variant type definition"),
                 ])
                 .with_notes(vec![
-                    "each algebraic data type can only be defined once".to_string(),
+                    "each variant type can only be defined once".to_string(),
                 ]),
             ResolutionError::DuplicateConstructor(name, span) => Diagnostic::error()
                 .with_message(format!("constructor `{}` is already defined", name))
@@ -155,29 +155,29 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),
                 ]),
-            TypeError::AdtNotFound(adt_id, span) => {
-                let type_name = name_table.lookup_type_name(adt_id);
+            TypeError::VariantNotFound(variant_id, span) => {
+                let type_name = name_table.lookup_type_name(variant_id);
                 Diagnostic::error()
-                    .with_message("algebraic data type not found")
+                    .with_message("variant type not found")
                     .with_labels(vec![
                         Label::primary(file_id, span.start..span.end)
                             .with_message(format!("type `{}` not found in inference context", type_name)),
                     ])
                     .with_notes(vec![
-                        "this is an internal error - the ADT should have been registered during resolution".to_string(),
+                        "this is an internal error - the variant type should have been registered during resolution".to_string(),
                     ])
             }
-            TypeError::ConstructorNotFound(adt_id, ctor_id, span) => {
-                let adt_name = name_table.lookup_type_name(adt_id);
+            TypeError::ConstructorNotFound(variant_id, ctor_id, span) => {
+                let variant_name = name_table.lookup_type_name(variant_id);
                 let ctor_name = name_table.lookup_name(ctor_id);
                 Diagnostic::error()
                     .with_message("constructor not found in type")
                     .with_labels(vec![
                         Label::primary(file_id, span.start..span.end)
-                            .with_message(format!("constructor `{}` not found in type `{}`", ctor_name, adt_name)),
+                            .with_message(format!("constructor `{}` not found in type `{}`", ctor_name, variant_name)),
                     ])
                     .with_notes(vec![
-                        "this is an internal error - the constructor should have been registered with the ADT".to_string(),
+                        "this is an internal error - the constructor should have been registered with the variant type".to_string(),
                     ])
             }
             TypeError::InvalidConstructorType(span) => Diagnostic::error()
@@ -187,7 +187,7 @@ pub fn report_type_errors(
                         .with_message("expected constructor to have function type"),
                 ])
                 .with_notes(vec![
-                    "constructors must have function types that take an argument and return the ADT".to_string(),
+                    "constructors must have function types that take an argument and return the variant type".to_string(),
                 ]),
         };
 

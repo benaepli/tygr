@@ -4,25 +4,25 @@ use crate::analysis::inference::{Inferrer, Typed};
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
 use crate::parser::{
-    Adt, Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, parse_program,
+    Variant, Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, parse_program,
 };
 use crate::{lexer, parser};
 use anyhow::anyhow;
 
-fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<Adt>, Vec<TypeAlias>) {
+fn split_declarations(decls: Vec<Declaration>) -> (Vec<LetDeclaration>, Vec<Variant>, Vec<TypeAlias>) {
     let mut let_decls = Vec::new();
-    let mut adts = Vec::new();
+    let mut variants = Vec::new();
     let mut type_aliases = Vec::new();
 
     for decl in decls {
         match decl {
             Declaration::Let(l) => let_decls.push(l),
-            Declaration::Adt(a) => adts.push(a),
+            Declaration::Variant(v) => variants.push(v),
             Declaration::Type(t) => type_aliases.push(t),
         }
     }
 
-    (let_decls, adts, type_aliases)
+    (let_decls, variants, type_aliases)
 }
 
 use crate::analysis::name_table::NameTable;
@@ -44,7 +44,7 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
         Some(v) => v,
     };
 
-    let (declarations, adts, aliases) = split_declarations(output);
+    let (declarations, variants, aliases) = split_declarations(output);
     let desugared = desugar(declarations).unwrap_or_else(|| Expr {
         kind: ExprKind::UnitLit,
         span: Span {
@@ -63,14 +63,14 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
             Ok(r) => r,
         }
     }
-    let mut resolved_adts = Vec::new();
-    for adt in adts {
-        match resolver.resolve_adt(adt) {
+    let mut resolved_variants = Vec::new();
+    for variant in variants {
+        match resolver.resolve_variant(variant) {
             Err(e) => {
                 report_resolution_errors(input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
             }
-            Ok(a) => resolved_adts.push(a),
+            Ok(v) => resolved_variants.push(v),
         }
     }
     let resolved = match resolver.resolve(desugared) {
@@ -85,8 +85,8 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
     let name_table = resolver.into_name_table();
 
     let mut inferrer = Inferrer::new();
-    for adt in resolved_adts {
-        inferrer.register_adt(adt);
+    for variant in resolved_variants {
+        inferrer.register_variant(variant);
     }
 
     let typed = match inferrer.infer(resolved) {

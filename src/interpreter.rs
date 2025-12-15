@@ -37,7 +37,7 @@ pub enum Value {
     Builtin(BuiltinFn),
     Record(HashMap<String, Value>),
     Constructor(TypeName, Name),
-    Adt(Rc<Value>, TypeName, Name),
+    Variant(Rc<Value>, TypeName, Name),
 }
 
 impl fmt::Debug for Value {
@@ -66,8 +66,8 @@ impl fmt::Debug for Value {
                 debug_map.finish()
             }
             Value::Constructor(_def_id, name) => write!(f, "<constructor:{}>", name),
-            Value::Adt(val, _def_id, name) => {
-                f.debug_tuple(&format!("Adt::{}", name)).field(val).finish()
+            Value::Variant(val, _def_id, name) => {
+                f.debug_tuple(&format!("Variant::{}", name)).field(val).finish()
             }
         }
     }
@@ -127,7 +127,7 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
             Value::Constructor(_def_id, name) => {
                 write!(f, "<{}>", self.name_table.lookup_name(name))
             }
-            Value::Adt(val, _def_id, name) => {
+            Value::Variant(val, _def_id, name) => {
                 let ctor_name = self.name_table.lookup_name(name);
                 if let Value::Unit = **val {
                     write!(f, "{}", ctor_name)
@@ -282,9 +282,9 @@ fn bind_pattern(
                 )))
             }
         }
-        TypedPatternKind::Constructor(adt_id, ctor_id, pat) => {
-            if let Value::Adt(v, adt, ctor) = &*value
-                && adt == adt_id
+        TypedPatternKind::Constructor(variant_id, ctor_id, pat) => {
+            if let Value::Variant(v, variant, ctor) = &*value
+                && variant == variant_id
             {
                 if ctor == ctor_id {
                     bind_pattern(pat, v.clone(), env)
@@ -296,7 +296,7 @@ fn bind_pattern(
                 }
             } else {
                 Err(EvalError::PatternMismatch(format!(
-                    "expected ADT constructor pattern, found {:?}",
+                    "expected variant constructor pattern, found {:?}",
                     value
                 )))
             }
@@ -549,8 +549,8 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
                 }))
             }
         }
-        Value::Constructor(adt_id, ctor_id) => {
-            Ok(Rc::new(Value::Adt(arg, adt_id.clone(), ctor_id.clone())))
+        Value::Constructor(variant_id, ctor_id) => {
+            Ok(Rc::new(Value::Variant(arg, variant_id.clone(), ctor_id.clone())))
         }
         _ => Err(EvalError::NotAFunction),
     }
@@ -666,8 +666,8 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 ))),
             }
         }
-        &TypedKind::Constructor(adt_id, ctor_id) => {
-            Ok(Rc::new(Value::Constructor(adt_id, ctor_id)))
+        &TypedKind::Constructor(variant_id, ctor_id) => {
+            Ok(Rc::new(Value::Constructor(variant_id, ctor_id)))
         }
     }
 }

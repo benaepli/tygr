@@ -1,6 +1,6 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedAdt, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
+    Name, Resolved, ResolvedVariant, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind,
     ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, TypeName,
 };
 use crate::builtin::{
@@ -160,7 +160,7 @@ pub enum TypedKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedAdt {
+pub struct TypedVariant {
     pub schemes: HashMap<Name, TypeScheme>,
     pub ty: Rc<Type>,
 }
@@ -175,7 +175,7 @@ pub struct Inferrer {
 
     type_ctx: TypeContext,
 
-    adts: HashMap<TypeName, TypedAdt>,
+    variants: HashMap<TypeName, TypedVariant>,
 }
 
 #[derive(Debug, Error)]
@@ -195,8 +195,8 @@ pub enum TypeError {
     #[error("field access on non-record type: {0:?}")]
     FieldAccessOnNonRecord(Rc<Type>, Span),
 
-    #[error("algebraic data type not found")]
-    AdtNotFound(TypeName, Span),
+    #[error("variant type not found")]
+    VariantNotFound(TypeName, Span),
 
     #[error("constructor not found in type")]
     ConstructorNotFound(TypeName, Name, Span),
@@ -213,7 +213,7 @@ impl Inferrer {
 
             type_ctx: HashMap::new(),
 
-            adts: HashMap::new(),
+            variants: HashMap::new(),
         }
     }
 
@@ -257,9 +257,9 @@ impl Inferrer {
         }
     }
 
-    pub fn register_adt(&mut self, adt: ResolvedAdt) {
+    pub fn register_variant(&mut self, variant: ResolvedVariant) {
         let mut params = Vec::new();
-        for param_id in adt.type_params {
+        for param_id in variant.type_params {
             let id = TypeID(self.next_var.0);
             self.next_var.0 += 1;
             let ty = Rc::new(Type::Var(id));
@@ -268,9 +268,9 @@ impl Inferrer {
         }
 
         let mut schemes = HashMap::new();
-        let ty = Rc::new(Type::Con(adt.name));
+        let ty = Rc::new(Type::Con(variant.name));
 
-        for (name, ctor) in adt.constructors.into_iter() {
+        for (name, ctor) in variant.constructors.into_iter() {
             let instantiated = self.instantiate_annotation(&ctor.annotation);
             schemes.insert(
                 name,
@@ -281,7 +281,7 @@ impl Inferrer {
             );
         }
 
-        self.adts.insert(adt.name, TypedAdt { schemes, ty });
+        self.variants.insert(variant.name, TypedVariant { schemes, ty });
     }
 
     fn apply_subst(&self, ty: &Rc<Type>) -> Rc<Type> {
@@ -571,16 +571,16 @@ impl Inferrer {
                     span,
                 })
             }
-            ResolvedPatternKind::Constructor(adt_id, ctor_id, pat) => {
-                let Some(adt) = self.adts.get(&adt_id) else {
-                    return Err(TypeError::AdtNotFound(adt_id, span));
+            ResolvedPatternKind::Constructor(variant_id, ctor_id, pat) => {
+                let Some(variant) = self.variants.get(&variant_id) else {
+                    return Err(TypeError::VariantNotFound(variant_id, span));
                 };
-                let Some(ctor_scheme) = adt.schemes.get(&ctor_id).cloned() else {
-                    return Err(TypeError::ConstructorNotFound(adt_id, ctor_id, span));
+                let Some(ctor_scheme) = variant.schemes.get(&ctor_id).cloned() else {
+                    return Err(TypeError::ConstructorNotFound(variant_id, ctor_id, span));
                 };
 
                 let ctor_ty = self.instantiate(&ctor_scheme);
-                let Type::Function(arg_ty, adt_ty) = ctor_ty.as_ref() else {
+                let Type::Function(arg_ty, variant_ty) = ctor_ty.as_ref() else {
                     return Err(TypeError::InvalidConstructorType(span));
                 };
 
@@ -588,8 +588,8 @@ impl Inferrer {
                 self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
 
                 Ok(TypedPattern {
-                    kind: TypedPatternKind::Constructor(adt_id, ctor_id, Box::new(typed_pat)),
-                    ty: adt_ty.clone(),
+                    kind: TypedPatternKind::Constructor(variant_id, ctor_id, Box::new(typed_pat)),
+                    ty: variant_ty.clone(),
                     span,
                 })
             }
@@ -927,16 +927,16 @@ impl Inferrer {
                     span,
                 })
             }
-            ResolvedKind::Constructor(adt_id, ctor_id) => {
-                let Some(adt) = self.adts.get(&adt_id) else {
-                    return Err(TypeError::AdtNotFound(adt_id, span));
+            ResolvedKind::Constructor(variant_id, ctor_id) => {
+                let Some(variant) = self.variants.get(&variant_id) else {
+                    return Err(TypeError::VariantNotFound(variant_id, span));
                 };
-                let Some(ctor) = adt.schemes.get(&ctor_id).cloned() else {
-                    return Err(TypeError::ConstructorNotFound(adt_id, ctor_id, span));
+                let Some(ctor) = variant.schemes.get(&ctor_id).cloned() else {
+                    return Err(TypeError::ConstructorNotFound(variant_id, ctor_id, span));
                 };
                 let ty = self.instantiate(&ctor);
                 Ok(Typed {
-                    kind: TypedKind::Constructor(adt_id, ctor_id),
+                    kind: TypedKind::Constructor(variant_id, ctor_id),
                     ty,
                     span,
                 })

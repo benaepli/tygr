@@ -1,6 +1,6 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Adt, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
+    Variant, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -31,7 +31,7 @@ pub struct ResolvedConstructor {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedAdt {
+pub struct ResolvedVariant {
     pub name: TypeName,
     pub type_params: Vec<TypeName>,
     pub constructors: HashMap<Name, ResolvedConstructor>,
@@ -152,8 +152,8 @@ pub enum ResolutionError {
     WrongNumberOfTypeArguments(String, usize, usize, Span),
     #[error("field `{0}` appears more than once in record")]
     DuplicateRecordField(String, Span),
-    #[error("algebraic data type `{0}` is already defined")]
-    DuplicateAdt(String, Span),
+    #[error("variant type `{0}` is already defined")]
+    DuplicateVariant(String, Span),
     #[error("constructor `{0}` is already defined")]
     DuplicateConstructor(String, Span),
     #[error("constructor `{0}` not found")]
@@ -209,7 +209,7 @@ pub struct Resolver {
 
     type_aliases: HashMap<String, TypeAliasEntry>,
 
-    adts: HashMap<String, TypeName>,
+    variants: HashMap<String, TypeName>,
     constructors: HashMap<String, (TypeName, Name)>,
 
     // Name preservation for error messages
@@ -229,7 +229,7 @@ impl Resolver {
 
             type_aliases: HashMap::new(),
 
-            adts: HashMap::new(),
+            variants: HashMap::new(),
             constructors: HashMap::new(),
 
             name_origins: HashMap::new(),
@@ -332,7 +332,7 @@ impl Resolver {
                             total,
                         })
                     }
-                } else if let Some(id) = self.adts.get(&name) {
+                } else if let Some(id) = self.variants.get(&name) {
                     Ok(Partial::Done(ResolvedAnnotation::new(
                         ResolvedAnnotationKind::Var(*id),
                         span,
@@ -434,27 +434,27 @@ impl Resolver {
         Ok(())
     }
 
-    pub fn resolve_adt(&mut self, adt: Adt) -> Result<ResolvedAdt, ResolutionError> {
-        if self.adts.contains_key(&adt.name) {
-            return Err(ResolutionError::DuplicateAdt(adt.name, adt.span));
+    pub fn resolve_variant(&mut self, variant: Variant) -> Result<ResolvedVariant, ResolutionError> {
+        if self.variants.contains_key(&variant.name) {
+            return Err(ResolutionError::DuplicateVariant(variant.name, variant.span));
         }
         let def_id = self.new_id();
-        self.adts.insert(adt.name.clone(), def_id);
-        self.type_name_origins.insert(def_id, adt.name.clone());
+        self.variants.insert(variant.name.clone(), def_id);
+        self.type_name_origins.insert(def_id, variant.name.clone());
 
         let mut constructors = HashMap::new();
 
         let mut type_scope = HashMap::new();
         let mut generic_ids = Vec::new();
 
-        for generic in adt.generics.clone() {
+        for generic in variant.generics.clone() {
             let id = self.new_id();
             self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
         }
         self.type_scopes.push(type_scope);
-        for (name, constructor) in adt.constructors.into_iter() {
+        for (name, constructor) in variant.constructors.into_iter() {
             if self.constructors.contains_key(&name) {
                 return Err(ResolutionError::DuplicateConstructor(
                     name,
@@ -469,18 +469,18 @@ impl Resolver {
                 ResolvedConstructor {
                     annotation: self
                         .resolve_annotation(constructor.annotation)?
-                        .finalize(adt.span)?,
+                        .finalize(variant.span)?,
                     span: constructor.span,
                 },
             );
             self.constructors.insert(name, (def_id, name_id));
         }
         self.type_scopes.pop();
-        Ok(ResolvedAdt {
+        Ok(ResolvedVariant {
             name: def_id,
             type_params: generic_ids,
             constructors,
-            span: adt.span,
+            span: variant.span,
         })
     }
 
@@ -524,12 +524,12 @@ impl Resolver {
                 Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span))
             }
             PatternKind::Constructor(name, pat) => {
-                let Some((adt_id, ctor_id)) = self.constructors.get(&name).cloned() else {
+                let Some((variant_id, ctor_id)) = self.constructors.get(&name).cloned() else {
                     return Err(ResolutionError::ConstructorNotFound(name, span));
                 };
                 let resolved = self.analyze_pattern(*pat, scope)?;
                 Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Constructor(adt_id, ctor_id, Box::new(resolved)),
+                    ResolvedPatternKind::Constructor(variant_id, ctor_id, Box::new(resolved)),
                     span,
                 ))
             }
@@ -567,9 +567,9 @@ impl Resolver {
                         }
                     }
                 }
-                if let Some((adt_id, ctor_id)) = self.constructors.get(&name).cloned() {
+                if let Some((variant_id, ctor_id)) = self.constructors.get(&name).cloned() {
                     return Ok((
-                        Resolved::new(ResolvedKind::Constructor(adt_id, ctor_id), span),
+                        Resolved::new(ResolvedKind::Constructor(variant_id, ctor_id), span),
                         HashSet::new(),
                     ));
                 }

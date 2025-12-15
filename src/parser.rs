@@ -79,7 +79,7 @@ pub struct Constructor {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Adt {
+pub struct Variant {
     pub name: String,
     pub generics: Vec<Generic>,
     pub constructors: Vec<(String, Constructor)>,
@@ -98,7 +98,7 @@ pub struct LetDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
     Let(LetDeclaration),
-    Adt(Adt),
+    Variant(Variant),
     Type(TypeAlias),
 }
 
@@ -623,7 +623,7 @@ where
         })
 }
 
-fn adt<'a, I>() -> impl Parser<'a, I, Adt, extra::Err<Rich<'a, TokenKind>>>
+fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
@@ -657,7 +657,7 @@ where
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
-        .map_with(|((name, generics), constructors), extra| Adt {
+        .map_with(|((name, generics), constructors), extra| Variant {
             name,
             generics,
             constructors,
@@ -692,7 +692,7 @@ where
 {
     choice((
         type_alias().map(|t| Declaration::Type(t)),
-        adt().map(|a| Declaration::Adt(a)),
+        variant().map(|v| Declaration::Variant(v)),
         let_declaration().map(|l| Declaration::Let(l)),
     ))
 }
