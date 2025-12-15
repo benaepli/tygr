@@ -384,9 +384,11 @@ where
 
             let field = ident
                 .clone()
-                .then_ignore(just(TokenKind::Colon))
-                .then(expr.clone())
-                .map(|(name, value)| (name, value));
+                .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
+                .map_with(|(name, value_opt), e| match value_opt {
+                    Some(value) => (name, value),
+                    None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
+                });
 
             let record_lit = field
                 .separated_by(just(TokenKind::Comma))
