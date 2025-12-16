@@ -4,7 +4,7 @@ use crate::analysis::resolver::{
     ResolvedPattern, ResolvedPatternKind, ResolvedVariant, TypeName,
 };
 use crate::builtin::{
-    BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE,
+    BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
 };
 use crate::parser::{BinOp, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -12,6 +12,16 @@ use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Star,
+    Arrow(Rc<Kind>, Rc<Kind>),
+    Var(KindID),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KindID(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeID(pub usize);
@@ -29,7 +39,23 @@ pub struct TypeScheme {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
+pub struct Type {
+    pub ty: TypeKind,
+    pub kind: Rc<Kind>,
+}
+
+impl Type {
+    pub fn new(ty: TypeKind, kind: Rc<Kind>) -> Rc<Self> {
+        Rc::new(Self { ty, kind })
+    }
+
+    pub fn simple(name: TypeName) -> Rc<Self> {
+        Self::new(TypeKind::Con(name), Rc::new(Kind::Star))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeKind {
     Var(TypeID),
     Con(TypeName),
     App(Rc<Type>, Rc<Type>),
@@ -40,47 +66,47 @@ pub enum Type {
 }
 
 pub struct TypeDisplay<'a> {
-    pub ty: &'a Type,
+    pub ty: Rc<Type>,
     pub name_table: &'a NameTable,
 }
 
 impl<'a> TypeDisplay<'a> {
-    pub fn new(ty: &'a Type, name_table: &'a NameTable) -> Self {
+    pub fn new(ty: Rc<Type>, name_table: &'a NameTable) -> Self {
         Self { ty, name_table }
     }
 }
 
 impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.ty {
-            Type::Var(id) => write!(f, "{}", id),
-            Type::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
-            Type::App(lhs, rhs) => {
-                let lhs_display = TypeDisplay::new(lhs, self.name_table);
-                let rhs_display = TypeDisplay::new(rhs, self.name_table);
+        match &self.ty.as_ref().ty {
+            TypeKind::Var(id) => write!(f, "{}", id),
+            TypeKind::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(&id)),
+            TypeKind::App(lhs, rhs) => {
+                let lhs_display = TypeDisplay::new(lhs.clone(), self.name_table);
+                let rhs_display = TypeDisplay::new(rhs.clone(), self.name_table);
                 write!(f, "{}[{}]", lhs_display, rhs_display)
             }
-            Type::Pair(a, b) => {
-                let a_display = TypeDisplay::new(a, self.name_table);
-                let b_display = TypeDisplay::new(b, self.name_table);
+            TypeKind::Pair(a, b) => {
+                let a_display = TypeDisplay::new(a.clone(), self.name_table);
+                let b_display = TypeDisplay::new(b.clone(), self.name_table);
                 write!(f, "({} * {})", a_display, b_display)
             }
-            Type::Function(arg, ret) => {
-                let arg_display = TypeDisplay::new(arg, self.name_table);
-                let ret_display = TypeDisplay::new(ret, self.name_table);
-                match arg.as_ref() {
-                    Type::Function(_, _) => write!(f, "({}) -> {}", arg_display, ret_display),
+            TypeKind::Function(arg, ret) => {
+                let arg_display = TypeDisplay::new(arg.clone(), self.name_table);
+                let ret_display = TypeDisplay::new(ret.clone(), self.name_table);
+                match arg.as_ref().ty {
+                    TypeKind::Function(_, _) => write!(f, "({}) -> {}", arg_display, ret_display),
                     _ => write!(f, "{} -> {}", arg_display, ret_display),
                 }
             }
-            Type::Record(fields) => {
+            TypeKind::Record(fields) => {
                 write!(f, "{{ ")?;
                 let mut first = true;
                 for (name, ty) in fields {
                     if !first {
                         write!(f, ", ")?;
                     }
-                    let ty_display = TypeDisplay::new(ty, self.name_table);
+                    let ty_display = TypeDisplay::new(ty.clone(), self.name_table);
                     write!(f, "{}: {}", name, ty_display)?;
                     first = false;
                 }
@@ -169,15 +195,6 @@ type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
 type TypeContext = HashMap<TypeName, Rc<Type>>;
 
-pub struct Inferrer {
-    substitution: Substitution,
-    next_var: TypeID,
-
-    type_ctx: TypeContext,
-
-    variants: HashMap<TypeName, TypedVariant>,
-}
-
 #[derive(Debug, Error)]
 pub enum TypeError {
     #[error("type mismatch: expected {1:?}, found {0:?}")]
@@ -203,11 +220,29 @@ pub enum TypeError {
 
     #[error("invalid constructor type (expected function type)")]
     InvalidConstructorType(Span),
+
+    #[error("kind mismatch: expected {1:?}, found {0:?}")]
+    KindMismatch(Rc<Kind>, Rc<Kind>, Span),
+}
+
+pub struct Inferrer {
+    kind_substitution: HashMap<KindID, Rc<Kind>>,
+    next_kind: KindID,
+
+    substitution: Substitution,
+    next_var: TypeID,
+
+    type_ctx: TypeContext,
+
+    variants: HashMap<TypeName, TypedVariant>,
 }
 
 impl Inferrer {
     pub fn new() -> Self {
         Self {
+            kind_substitution: HashMap::new(),
+            next_kind: KindID(0),
+
             substitution: HashMap::new(),
             next_var: TypeID(0),
 
@@ -217,125 +252,234 @@ impl Inferrer {
         }
     }
 
-    fn new_type(&mut self) -> Rc<Type> {
-        let id = self.next_var.0;
-        self.next_var.0 += 1;
-        Rc::new(Type::Var(TypeID(id)))
+    fn new_kind(&mut self) -> Rc<Kind> {
+        let id = KindID(self.next_kind.0);
+        self.next_kind.0 += 1;
+        Rc::new(Kind::Var(id))
     }
 
-    fn instantiate_annotation(&self, annot: &ResolvedAnnotation) -> Rc<Type> {
-        match &annot.kind {
-            ResolvedAnnotationKind::Var(name_id) => {
-                if let Some(ty) = self.type_ctx.get(name_id) {
-                    ty.clone()
+    fn new_type(&mut self) -> TypeKind {
+        let id = self.next_var.0;
+        self.next_var.0 += 1;
+        TypeKind::Var(TypeID(id))
+    }
+
+    fn lookup_kind(&self, name: TypeName) -> Option<Rc<Kind>> {
+        if let Some(ty) = self.type_ctx.get(&name) {
+            return Some(ty.kind.clone());
+        }
+
+        if let Some(variant) = self.variants.get(&name) {
+            return Some(variant.ty.kind.clone());
+        }
+        builtin_kinds(name)
+    }
+
+    fn unify_kinds(&mut self, k1: &Rc<Kind>, k2: &Rc<Kind>, span: Span) -> Result<(), TypeError> {
+        let k1 = self.apply_kind_subst(k1);
+        let k2 = self.apply_kind_subst(k2);
+
+        match (k1.as_ref(), k2.as_ref()) {
+            (Kind::Star, Kind::Star) => Ok(()),
+            (Kind::Arrow(a1, r1), Kind::Arrow(a2, r2)) => {
+                self.unify_kinds(a1, a2, span)?;
+                self.unify_kinds(r1, r2, span)
+            }
+            (Kind::Var(id1), Kind::Var(id2)) if id1 == id2 => Ok(()),
+            (Kind::Var(id), _) => {
+                self.kind_substitution.insert(*id, k2);
+                Ok(())
+            }
+            (_, Kind::Var(id)) => {
+                self.kind_substitution.insert(*id, k1);
+                Ok(())
+            }
+            _ => Err(TypeError::KindMismatch(k1, k2, span)),
+        }
+    }
+
+    fn apply_kind_subst(&self, k: &Rc<Kind>) -> Rc<Kind> {
+        match k.as_ref() {
+            Kind::Var(id) => {
+                if let Some(sub) = self.kind_substitution.get(id) {
+                    self.apply_kind_subst(sub)
                 } else {
-                    Rc::new(Type::Con(*name_id))
+                    k.clone()
+                }
+            }
+            Kind::Arrow(lhs, rhs) => Rc::new(Kind::Arrow(
+                self.apply_kind_subst(lhs),
+                self.apply_kind_subst(rhs),
+            )),
+            Kind::Star => k.clone(),
+        }
+    }
+
+    pub fn instantiate_annotation(&mut self, annot: &ResolvedAnnotation) -> Result<Rc<Type>, TypeError> {
+        match &annot.kind {
+            ResolvedAnnotationKind::Var(name) => {
+                if let Some(ty) = self.type_ctx.get(name) {
+                    Ok(ty.clone())
+                } else if let Some(kind) = self.lookup_kind(*name) {
+                    Ok(Type::new(TypeKind::Con(*name), kind))
+                } else {
+                    Ok(Type::new(TypeKind::Con(*name), self.new_kind()))
                 }
             }
             ResolvedAnnotationKind::App(lhs, rhs) => {
-                let t_lhs = self.instantiate_annotation(lhs);
-                let t_rhs = self.instantiate_annotation(rhs);
-                Rc::new(Type::App(t_lhs, t_rhs))
+                let t_lhs = self.instantiate_annotation(lhs)?;
+                let t_rhs = self.instantiate_annotation(rhs)?;
+
+                let k_ret = self.new_kind();
+                let expected_lhs_kind = Rc::new(Kind::Arrow(t_rhs.kind.clone(), k_ret.clone()));
+
+                self.unify_kinds(&t_lhs.kind, &expected_lhs_kind, annot.span)?;
+
+                Ok(Type::new(
+                    TypeKind::App(t_lhs, t_rhs),
+                    self.apply_kind_subst(&k_ret),
+                ))
             }
             ResolvedAnnotationKind::Pair(lhs, rhs) => {
-                let t_lhs = self.instantiate_annotation(lhs);
-                let t_rhs = self.instantiate_annotation(rhs);
-                Rc::new(Type::Pair(t_lhs, t_rhs))
+                let t_lhs = self.instantiate_annotation(lhs)?;
+                let t_rhs = self.instantiate_annotation(rhs)?;
+
+                self.unify_kinds(&t_lhs.kind, &Rc::new(Kind::Star), annot.span)?;
+                self.unify_kinds(&t_rhs.kind, &Rc::new(Kind::Star), annot.span)?;
+
+                Ok(Type::new(TypeKind::Pair(t_lhs, t_rhs), Rc::new(Kind::Star)))
             }
             ResolvedAnnotationKind::Lambda(param, ret) => {
-                let t_param = self.instantiate_annotation(param);
-                let t_ret = self.instantiate_annotation(ret);
-                Rc::new(Type::Function(t_param, t_ret))
+                let t_param = self.instantiate_annotation(param)?;
+                let t_ret = self.instantiate_annotation(ret)?;
+
+                self.unify_kinds(&t_param.kind, &Rc::new(Kind::Star), annot.span)?;
+                self.unify_kinds(&t_ret.kind, &Rc::new(Kind::Star), annot.span)?;
+
+                Ok(Type::new(
+                    TypeKind::Function(t_param, t_ret),
+                    Rc::new(Kind::Star),
+                ))
             }
             ResolvedAnnotationKind::Record(fields) => {
-                let mut field_types = BTreeMap::new();
-                for (name, annot) in fields {
-                    field_types.insert(name.clone(), self.instantiate_annotation(annot));
+                let mut new_fields = BTreeMap::new();
+                for (name, ann) in fields {
+                    let t_field = self.instantiate_annotation(ann)?;
+                    self.unify_kinds(&t_field.kind, &Rc::new(Kind::Star), ann.span)?;
+                    new_fields.insert(name.clone(), t_field);
                 }
-                Rc::new(Type::Record(field_types))
+                Ok(Type::new(TypeKind::Record(new_fields), Rc::new(Kind::Star)))
             }
         }
     }
 
-    fn apply_wrap(&self, ty: Rc<Type>, types: &[Rc<Type>]) -> Rc<Type> {
-        match types.split_first() {
-            Some((head, tail)) => self.apply_wrap(Rc::new(Type::App(ty, head.clone())), tail),
-            None => ty,
+    fn apply_wrap(&mut self, lhs: Rc<Type>, args: &[Rc<Type>]) -> Rc<Type> {
+        match args.split_first() {
+            Some((arg, rest)) => {
+                let result_kind = match lhs.kind.as_ref() {
+                    Kind::Arrow(_, ret_kind) => ret_kind.clone(),
+                    Kind::Var(_) => self.new_kind(),
+                    Kind::Star => Rc::new(Kind::Star),
+                };
+                let new_lhs = Type::new(
+                    TypeKind::App(lhs.clone(), arg.clone()),
+                    self.apply_kind_subst(&result_kind),
+                );
+                self.apply_wrap(new_lhs, rest)
+            }
+            None => lhs,
         }
     }
 
-    pub fn register_variant(&mut self, variant: ResolvedVariant) {
+    pub fn register_variant(&mut self, variant: ResolvedVariant) -> Result<(), TypeError> {
         let mut params = Vec::new();
         let mut param_types = Vec::new();
         for param_id in variant.type_params {
             let id = TypeID(self.next_var.0);
             self.next_var.0 += 1;
-            let ty = Rc::new(Type::Var(id));
+            let kind = self.new_kind();
+            let ty = Type::new(TypeKind::Var(id), kind);
             param_types.push(ty.clone());
             self.type_ctx.insert(param_id.clone(), ty);
             params.push(id);
         }
 
-        let mut schemes = HashMap::new();
-        let ty = Rc::new(Type::Con(variant.name));
+        let mut inferred_constructors = Vec::new();
+        for (name, ctor) in variant.constructors {
+            let ty = self.instantiate_annotation(&ctor.annotation)?;
+            inferred_constructors.push((name, ty));
+        }
 
-        for (name, ctor) in variant.constructors.into_iter() {
-            let instantiated = self.instantiate_annotation(&ctor.annotation);
+        let mut variant_kind = Rc::new(Kind::Star);
+        for p in param_types.iter().rev() {
+            let pk = self.apply_kind_subst(&p.kind);
+            variant_kind = Rc::new(Kind::Arrow(pk, variant_kind));
+        }
+
+        let variant_ty = Type::new(TypeKind::Con(variant.name), variant_kind);
+        let mut schemes = HashMap::new();
+
+        for (name, arg_ty) in inferred_constructors {
+            let ret_ty = self.apply_wrap(variant_ty.clone(), &param_types);
+
             schemes.insert(
                 name,
                 TypeScheme {
                     vars: params.clone(),
-                    ty: Rc::new(Type::Function(
-                        instantiated.clone(),
-                        self.apply_wrap(ty.clone(), &param_types),
-                    )),
+                    ty: Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
                 },
             );
         }
 
-        self.variants
-            .insert(variant.name, TypedVariant { schemes, ty });
+        self.variants.insert(
+            variant.name,
+            TypedVariant {
+                schemes,
+                ty: variant_ty,
+            },
+        );
+        Ok(())
     }
 
     fn apply_subst(&self, ty: &Rc<Type>) -> Rc<Type> {
-        match ty.as_ref() {
-            Type::Var(id) => {
+        match &ty.ty {
+            TypeKind::Var(id) => {
                 if let Some(t) = self.substitution.get(id) {
                     self.apply_subst(t)
                 } else {
                     ty.clone()
                 }
             }
-            Type::Pair(a, b) => {
+            TypeKind::Pair(a, b) => {
                 let a_subst = self.apply_subst(a);
                 let b_subst = self.apply_subst(b);
-                Rc::new(Type::Pair(a_subst, b_subst))
+                Type::new(TypeKind::Pair(a_subst, b_subst), ty.kind.clone())
             }
-            Type::Function(arg, ret) => {
+            TypeKind::Function(arg, ret) => {
                 let arg_subst = self.apply_subst(arg);
                 let ret_subst = self.apply_subst(ret);
-                Rc::new(Type::Function(arg_subst, ret_subst))
+                Type::new(TypeKind::Function(arg_subst, ret_subst), ty.kind.clone())
             }
-            Type::App(lhs, rhs) => {
+            TypeKind::App(lhs, rhs) => {
                 let lhs_subst = self.apply_subst(lhs);
                 let rhs_subst = self.apply_subst(rhs);
-                Rc::new(Type::App(lhs_subst, rhs_subst))
+                Type::new(TypeKind::App(lhs_subst, rhs_subst), ty.kind.clone())
             }
-            Type::Record(fields) => {
+            TypeKind::Record(fields) => {
                 let mut new_fields = BTreeMap::new();
-                for (name, ty) in fields {
-                    new_fields.insert(name.clone(), self.apply_subst(ty));
+                for (name, t) in fields {
+                    new_fields.insert(name.clone(), self.apply_subst(t));
                 }
-                Rc::new(Type::Record(new_fields))
+                Type::new(TypeKind::Record(new_fields), ty.kind.clone())
             }
-            Type::Con(_) => ty.clone(),
+            TypeKind::Con(_) => ty.clone(),
         }
     }
 
     fn instantiate(&mut self, scheme: &TypeScheme) -> Rc<Type> {
         let mut mapping = HashMap::new();
         for &var in &scheme.vars {
-            mapping.insert(var, self.new_type());
+            mapping.insert(var, Type::new(self.new_type(), self.new_kind()));
         }
         self.instantiate_with_mapping(&scheme.ty, &mapping)
     }
@@ -345,80 +489,82 @@ impl Inferrer {
         ty: &Rc<Type>,
         mapping: &HashMap<TypeID, Rc<Type>>,
     ) -> Rc<Type> {
-        match ty.as_ref() {
-            Type::Var(id) => {
+        match &ty.ty {
+            TypeKind::Var(id) => {
                 if let Some(new_ty) = mapping.get(id) {
                     new_ty.clone()
                 } else {
                     ty.clone()
                 }
             }
-            Type::Pair(a, b) => {
+            TypeKind::Pair(a, b) => {
                 let new_a = self.instantiate_with_mapping(a, mapping);
                 let new_b = self.instantiate_with_mapping(b, mapping);
-                Rc::new(Type::Pair(new_a, new_b))
+                Type::new(TypeKind::Pair(new_a, new_b), ty.kind.clone())
             }
-            Type::Function(arg, ret) => {
+            TypeKind::Function(arg, ret) => {
                 let new_arg = self.instantiate_with_mapping(arg, mapping);
                 let new_ret = self.instantiate_with_mapping(ret, mapping);
-                Rc::new(Type::Function(new_arg, new_ret))
+                Type::new(TypeKind::Function(new_arg, new_ret), ty.kind.clone())
             }
-            Type::App(lhs, rhs) => {
+            TypeKind::App(lhs, rhs) => {
                 let new_lhs = self.instantiate_with_mapping(lhs, mapping);
                 let new_rhs = self.instantiate_with_mapping(rhs, mapping);
-                Rc::new(Type::App(new_lhs, new_rhs))
+                Type::new(TypeKind::App(new_lhs, new_rhs), ty.kind.clone())
             }
-            Type::Record(fields) => {
+            TypeKind::Record(fields) => {
                 let mut new_fields = BTreeMap::new();
-                for (name, ty) in fields {
-                    new_fields.insert(name.clone(), self.instantiate_with_mapping(ty, mapping));
+                for (name, t) in fields {
+                    new_fields.insert(name.clone(), self.instantiate_with_mapping(t, mapping));
                 }
-                Rc::new(Type::Record(new_fields))
+                Type::new(TypeKind::Record(new_fields), ty.kind.clone())
             }
-            Type::Con(_) => ty.clone(),
+            TypeKind::Con(_) => ty.clone(),
         }
     }
 
     fn occurs(&self, id: TypeID, ty: &Rc<Type>) -> bool {
         let ty = self.apply_subst(ty);
-        match ty.as_ref() {
-            Type::Var(var_id) => *var_id == id,
-            Type::Pair(a, b) => self.occurs(id, a) || self.occurs(id, b),
-            Type::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
-            Type::App(lhs, rhs) => self.occurs(id, lhs) || self.occurs(id, rhs),
-            Type::Record(fields) => fields.values().any(|ty| self.occurs(id, ty)),
-            Type::Con(_) => false,
+        match &ty.ty {
+            TypeKind::Var(var_id) => *var_id == id,
+            TypeKind::Pair(a, b) => self.occurs(id, a) || self.occurs(id, b),
+            TypeKind::Function(arg, ret) => self.occurs(id, arg) || self.occurs(id, ret),
+            TypeKind::App(lhs, rhs) => self.occurs(id, lhs) || self.occurs(id, rhs),
+            TypeKind::Record(fields) => fields.values().any(|t| self.occurs(id, t)),
+            TypeKind::Con(_) => false,
         }
     }
 
     fn unify(&mut self, t1: &Rc<Type>, t2: &Rc<Type>, span: Span) -> Result<(), TypeError> {
+        self.unify_kinds(&t1.kind, &t2.kind, span)?;
+
         let t1 = self.apply_subst(t1);
         let t2 = self.apply_subst(t2);
 
-        match (t1.as_ref(), t2.as_ref()) {
-            (Type::Var(id1), Type::Var(id2)) if id1 == id2 => Ok(()),
-            (Type::Var(id), _) => self.unify_var(*id, &t2, span),
-            (_, Type::Var(id)) => self.unify_var(*id, &t1, span),
+        match (&t1.ty, &t2.ty) {
+            (TypeKind::Var(id1), TypeKind::Var(id2)) if id1 == id2 => Ok(()),
+            (TypeKind::Var(id), _) => self.unify_var(*id, &t2, span),
+            (_, TypeKind::Var(id)) => self.unify_var(*id, &t1, span),
 
-            (Type::Con(n1), Type::Con(n2)) if n1 == n2 => Ok(()),
+            (TypeKind::Con(n1), TypeKind::Con(n2)) if n1 == n2 => Ok(()),
 
-            (Type::App(l1, r1), Type::App(l2, r2)) => {
+            (TypeKind::App(l1, r1), TypeKind::App(l2, r2)) => {
                 self.unify(l1, l2, span)?;
                 self.unify(r1, r2, span)
             }
 
-            (Type::Pair(a1, b1), Type::Pair(a2, b2)) => {
+            (TypeKind::Pair(a1, b1), TypeKind::Pair(a2, b2)) => {
                 self.unify(a1, a2, span)?;
                 self.unify(b1, b2, span)?;
                 Ok(())
             }
 
-            (Type::Function(arg1, ret1), Type::Function(arg2, ret2)) => {
+            (TypeKind::Function(arg1, ret1), TypeKind::Function(arg2, ret2)) => {
                 self.unify(arg1, arg2, span)?;
                 self.unify(ret1, ret2, span)?;
                 Ok(())
             }
-            (Type::Record(s1), Type::Record(s2)) => {
+            (TypeKind::Record(s1), TypeKind::Record(s2)) => {
                 let equal_keys = s1.len() == s2.len() && s1.keys().all(|k| s2.contains_key(k));
                 if !equal_keys {
                     return Err(TypeError::RecordFieldMismatch(t1.clone(), t2.clone(), span));
@@ -445,35 +591,35 @@ impl Inferrer {
 
     fn free_in_type(&self, ty: &Rc<Type>) -> HashSet<TypeID> {
         let ty = self.apply_subst(ty);
-        match ty.as_ref() {
-            Type::Var(id) => {
+        match &ty.ty {
+            TypeKind::Var(id) => {
                 let mut set = HashSet::new();
                 set.insert(*id);
                 set
             }
-            Type::Pair(a, b) => {
+            TypeKind::Pair(a, b) => {
                 let mut set = self.free_in_type(a);
                 set.extend(self.free_in_type(b));
                 set
             }
-            Type::Function(arg, ret) => {
+            TypeKind::Function(arg, ret) => {
                 let mut set = self.free_in_type(arg);
                 set.extend(self.free_in_type(ret));
                 set
             }
-            Type::App(lhs, rhs) => {
+            TypeKind::App(lhs, rhs) => {
                 let mut set = self.free_in_type(lhs);
                 set.extend(self.free_in_type(rhs));
                 set
             }
-            Type::Record(fields) => {
+            TypeKind::Record(fields) => {
                 let mut set = HashSet::new();
                 for ty in fields.values() {
                     set.extend(self.free_in_type(ty));
                 }
                 set
             }
-            Type::Con(_) => HashSet::new(),
+            TypeKind::Con(_) => HashSet::new(),
         }
     }
 
@@ -508,6 +654,13 @@ impl Inferrer {
         self.infer_type(&env, expr)
     }
 
+    fn get_list_constructor(&self) -> Rc<Type> {
+        let kind = self
+            .lookup_kind(LIST_TYPE)
+            .expect("List type kind not found");
+        Type::new(TypeKind::Con(LIST_TYPE), kind)
+    }
+
     fn infer_pattern(
         &mut self,
         pat: ResolvedPattern,
@@ -516,7 +669,7 @@ impl Inferrer {
         let span = pat.span;
         match pat.kind {
             ResolvedPatternKind::Var(name) => {
-                let ty = self.new_type();
+                let ty = Type::new(self.new_type(), Rc::new(Kind::Star));
                 let scheme = TypeScheme {
                     vars: vec![],
                     ty: ty.clone(),
@@ -530,18 +683,21 @@ impl Inferrer {
             }
             ResolvedPatternKind::Wildcard => Ok(TypedPattern {
                 kind: TypedPatternKind::Wildcard,
-                ty: self.new_type(),
+                ty: Type::new(self.new_type(), Rc::new(Kind::Star)),
                 span,
             }),
             ResolvedPatternKind::Unit => Ok(TypedPattern {
                 kind: TypedPatternKind::Unit,
-                ty: Rc::new(Type::Con(UNIT_TYPE)),
+                ty: Type::simple(UNIT_TYPE),
                 span,
             }),
             ResolvedPatternKind::Pair(p1, p2) => {
                 let typed_p1 = self.infer_pattern(*p1, new_env)?;
                 let typed_p2 = self.infer_pattern(*p2, new_env)?;
-                let pair_ty = Rc::new(Type::Pair(typed_p1.ty.clone(), typed_p2.ty.clone()));
+                let pair_ty = Type::new(
+                    TypeKind::Pair(typed_p1.ty.clone(), typed_p2.ty.clone()),
+                    Rc::new(Kind::Star),
+                );
                 Ok(TypedPattern {
                     kind: TypedPatternKind::Pair(Box::new(typed_p1), Box::new(typed_p2)),
                     ty: pair_ty,
@@ -552,10 +708,10 @@ impl Inferrer {
                 let typed_p1 = self.infer_pattern(*p1, new_env)?;
                 let typed_p2 = self.infer_pattern(*p2, new_env)?;
 
-                let list_ty = Rc::new(Type::App(
-                    Rc::new(Type::Con(LIST_TYPE)),
-                    typed_p1.ty.clone(),
-                ));
+                let list_ty = Type::new(
+                    TypeKind::App(self.get_list_constructor(), typed_p1.ty.clone()),
+                    Rc::new(Kind::Star),
+                );
                 self.unify(&typed_p2.ty, &list_ty, typed_p2.span)?;
 
                 Ok(TypedPattern {
@@ -566,7 +722,13 @@ impl Inferrer {
             }
             ResolvedPatternKind::EmptyList => Ok(TypedPattern {
                 kind: TypedPatternKind::EmptyList,
-                ty: Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), self.new_type())),
+                ty: Type::new(
+                    TypeKind::App(
+                        self.get_list_constructor(),
+                        Type::new(self.new_type(), Rc::new(Kind::Star)),
+                    ),
+                    Rc::new(Kind::Star),
+                ),
                 span,
             }),
             ResolvedPatternKind::Record(fields) => {
@@ -577,7 +739,7 @@ impl Inferrer {
                     field_types.insert(field_name.clone(), typed_field.ty.clone());
                     typed.insert(field_name, typed_field);
                 }
-                let record_ty = Rc::new(Type::Record(field_types));
+                let record_ty = Type::new(TypeKind::Record(field_types), Rc::new(Kind::Star));
                 Ok(TypedPattern {
                     kind: TypedPatternKind::Record(typed),
                     ty: record_ty,
@@ -593,7 +755,7 @@ impl Inferrer {
                 };
 
                 let ctor_ty = self.instantiate(&ctor_scheme);
-                let Type::Function(arg_ty, variant_ty) = ctor_ty.as_ref() else {
+                let TypeKind::Function(arg_ty, variant_ty) = &ctor_ty.ty else {
                     return Err(TypeError::InvalidConstructorType(span));
                 };
 
@@ -614,33 +776,36 @@ impl Inferrer {
         match expr.kind {
             ResolvedKind::IntLit(i) => Ok(Typed {
                 kind: TypedKind::IntLit(i),
-                ty: Rc::new(Type::Con(INT_TYPE)),
+                ty: Type::simple(INT_TYPE),
                 span,
             }),
             ResolvedKind::FloatLit(f) => Ok(Typed {
                 kind: TypedKind::FloatLit(f),
-                ty: Rc::new(Type::Con(FLOAT_TYPE)),
+                ty: Type::simple(FLOAT_TYPE),
                 span,
             }),
             ResolvedKind::BoolLit(b) => Ok(Typed {
                 kind: TypedKind::BoolLit(b),
-                ty: Rc::new(Type::Con(BOOL_TYPE)),
+                ty: Type::simple(BOOL_TYPE),
                 span,
             }),
             ResolvedKind::StringLit(s) => Ok(Typed {
                 kind: TypedKind::StringLit(s),
-                ty: Rc::new(Type::Con(STRING_TYPE)),
+                ty: Type::simple(STRING_TYPE),
                 span,
             }),
             ResolvedKind::UnitLit => Ok(Typed {
                 kind: TypedKind::UnitLit,
-                ty: Rc::new(Type::Con(UNIT_TYPE)),
+                ty: Type::simple(UNIT_TYPE),
                 span,
             }),
             ResolvedKind::PairLit(first, second) => {
                 let typed_first = self.infer_type(env, *first)?;
                 let typed_second = self.infer_type(env, *second)?;
-                let pair_ty = Rc::new(Type::Pair(typed_first.ty.clone(), typed_second.ty.clone()));
+                let pair_ty = Type::new(
+                    TypeKind::Pair(typed_first.ty.clone(), typed_second.ty.clone()),
+                    Rc::new(Kind::Star),
+                );
                 Ok(Typed {
                     kind: TypedKind::PairLit(Box::new(typed_first), Box::new(typed_second)),
                     ty: pair_ty,
@@ -668,7 +833,7 @@ impl Inferrer {
                 let mut new_env = env.clone();
                 let typed_param = self.infer_pattern(param, &mut new_env)?;
                 if let Some(annot) = param_type {
-                    let expected_ty = self.instantiate_annotation(&annot);
+                    let expected_ty = self.instantiate_annotation(&annot)?;
                     self.unify(&typed_param.ty, &expected_ty, typed_param.span)?;
                 }
 
@@ -676,7 +841,10 @@ impl Inferrer {
                 let body_ty = self.apply_subst(&typed_body.ty);
                 let param_ty_subst = self.apply_subst(&typed_param.ty);
 
-                let fn_ty = Rc::new(Type::Function(param_ty_subst, body_ty));
+                let fn_ty = Type::new(
+                    TypeKind::Function(param_ty_subst, body_ty),
+                    Rc::new(Kind::Star),
+                );
 
                 Ok(Typed {
                     kind: TypedKind::Lambda {
@@ -693,9 +861,11 @@ impl Inferrer {
                 let typed_func = self.infer_type(env, *func)?;
                 let typed_arg = self.infer_type(env, *arg)?;
 
-                let result_ty = self.new_type();
-                let expected_fn_ty =
-                    Rc::new(Type::Function(typed_arg.ty.clone(), result_ty.clone()));
+                let result_ty = Type::new(self.new_type(), self.new_kind());
+                let expected_fn_ty = Type::new(
+                    TypeKind::Function(typed_arg.ty.clone(), result_ty.clone()),
+                    Rc::new(Kind::Star),
+                );
 
                 self.unify(&typed_func.ty, &expected_fn_ty, span)?;
                 let result_ty_subst = self.apply_subst(&result_ty);
@@ -715,12 +885,12 @@ impl Inferrer {
                 type_params,
             } => {
                 for param_id in type_params {
-                    let ty = self.new_type();
+                    let ty = Type::new(self.new_type(), self.new_kind());
                     self.type_ctx.insert(param_id, ty);
                 }
                 let typed_value = self.infer_type(env, *value)?;
                 if let Some(annot) = value_type {
-                    let expected_ty = self.instantiate_annotation(&annot);
+                    let expected_ty = self.instantiate_annotation(&annot)?;
                     self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
                 }
                 let value_ty = self.apply_subst(&typed_value.ty);
@@ -752,15 +922,24 @@ impl Inferrer {
 
             ResolvedKind::Fix(inner_expr) => {
                 let typed_expr = self.infer_type(env, *inner_expr)?;
-                let a = self.new_type();
+                let a = Type::new(self.new_type(), Rc::new(Kind::Star));
 
                 // Constraint 1: The expression must have type 'a -> 'a.
-                let expected_generator_ty = Rc::new(Type::Function(a.clone(), a.clone()));
+                let expected_generator_ty = Type::new(
+                    TypeKind::Function(a.clone(), a.clone()),
+                    Rc::new(Kind::Star),
+                );
                 self.unify(&typed_expr.ty, &expected_generator_ty, span)?;
 
                 // Constraint 2: 'a' must itself be a function.
                 // This prevents using `fix` on simple values.
-                let function_shape = Rc::new(Type::Function(self.new_type(), self.new_type()));
+                let function_shape = Rc::new(Type::new(
+                    TypeKind::Function(
+                        Type::new(self.new_type(), Rc::new(Kind::Star)),
+                        Type::new(self.new_type(), Rc::new(Kind::Star)),
+                    ),
+                    Rc::new(Kind::Star),
+                ));
                 self.unify(&a, &function_shape, span)?;
 
                 // The final type is 'a', which is now guaranteed to be a function.
@@ -777,7 +956,7 @@ impl Inferrer {
                 let typed_cond = self.infer_type(env, *condition)?;
                 self.unify(
                     &typed_cond.ty,
-                    &Rc::new(Type::Con(BOOL_TYPE)),
+                    &Type::new(TypeKind::Con(BOOL_TYPE), Rc::new(Kind::Star)),
                     typed_cond.span,
                 )?;
 
@@ -801,7 +980,7 @@ impl Inferrer {
             ResolvedKind::Match(expr, branches) => {
                 let typed_expr = self.infer_type(env, *expr)?;
 
-                let ret_type = self.new_type();
+                let ret_type = Type::new(self.new_type(), Rc::new(Kind::Star));
                 let mut typed_branches = Vec::new();
                 for ResolvedMatchBranch {
                     pattern,
@@ -820,7 +999,10 @@ impl Inferrer {
                     self.unify(&body_ty, &ret_type, span)?;
 
                     // We treat a match branch's type as a function
-                    let fn_ty = Rc::new(Type::Function(param_ty_subst, body_ty));
+                    let fn_ty = Type::new(
+                        TypeKind::Function(param_ty_subst, body_ty),
+                        Rc::new(Kind::Star),
+                    );
 
                     typed_branches.push(TypedMatchPattern {
                         pattern: typed_pattern,
@@ -841,10 +1023,10 @@ impl Inferrer {
                 let typed_first = self.infer_type(env, *first)?;
                 let typed_second = self.infer_type(env, *second)?;
 
-                let list_ty = Rc::new(Type::App(
-                    Rc::new(Type::Con(LIST_TYPE)),
-                    typed_first.ty.clone(),
-                ));
+                let list_ty = Type::new(
+                    TypeKind::App(self.get_list_constructor(), typed_first.ty.clone()),
+                    Rc::new(Kind::Star),
+                );
 
                 self.unify(&typed_second.ty, &list_ty, typed_second.span)?;
 
@@ -856,7 +1038,13 @@ impl Inferrer {
             }
 
             ResolvedKind::EmptyListLit => {
-                let list_ty = Rc::new(Type::App(Rc::new(Type::Con(LIST_TYPE)), self.new_type()));
+                let list_ty = Type::new(
+                    TypeKind::App(
+                        self.get_list_constructor(),
+                        Type::new(self.new_type(), Rc::new(Kind::Star)),
+                    ),
+                    Rc::new(Kind::Star),
+                );
                 Ok(Typed {
                     kind: TypedKind::EmptyListLit,
                     ty: list_ty,
@@ -875,7 +1063,7 @@ impl Inferrer {
                     typed_fields.insert(name, typed_expr);
                 }
 
-                let record_ty = Rc::new(Type::Record(field_types));
+                let record_ty = Type::new(TypeKind::Record(field_types), Rc::new(Kind::Star));
 
                 Ok(Typed {
                     kind: TypedKind::RecordLit(typed_fields),
@@ -888,36 +1076,29 @@ impl Inferrer {
                 let typed_left = self.infer_type(env, *left)?;
                 let typed_right = self.infer_type(env, *right)?;
 
-                self.unify(
-                    &typed_left.ty,
-                    &Rc::new(Type::Con(BOOL_TYPE)),
-                    typed_left.span,
-                )?;
-                self.unify(
-                    &typed_right.ty,
-                    &Rc::new(Type::Con(BOOL_TYPE)),
-                    typed_right.span,
-                )?;
+                self.unify(&typed_left.ty, &Type::simple(BOOL_TYPE), typed_left.span)?;
+                self.unify(&typed_right.ty, &Type::simple(BOOL_TYPE), typed_right.span)?;
 
                 Ok(Typed {
                     kind: TypedKind::BinOp(op, Box::new(typed_left), Box::new(typed_right)),
-                    ty: Rc::new(Type::Con(BOOL_TYPE)),
+                    ty: Type::simple(BOOL_TYPE),
                     span,
                 })
             }
 
             ResolvedKind::FieldAccess(expr, field_name) => {
                 let typed_expr = self.infer_type(env, *expr)?;
-                let field_ty = self.new_type();
+                let field_ty = Type::new(self.new_type(), Rc::new(Kind::Star));
 
                 let t1 = self.apply_subst(&typed_expr.ty);
-                let Type::Record(s) = t1.as_ref() else {
+                let TypeKind::Record(s) = &t1.ty else {
                     return Err(TypeError::FieldAccessOnNonRecord(t1.clone(), span));
                 };
 
                 let mut expected_fields = s.clone();
                 expected_fields.insert(field_name.clone(), field_ty.clone());
-                let expected_struct_ty = Rc::new(Type::Record(expected_fields));
+                let expected_struct_ty =
+                    Type::new(TypeKind::Record(expected_fields), Rc::new(Kind::Star));
 
                 self.unify(&typed_expr.ty, &expected_struct_ty, span)?;
 

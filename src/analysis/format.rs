@@ -115,15 +115,15 @@ pub fn report_type_errors(
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end).with_message(format!(
                         "expected type `{}`, found type `{}`",
-                        TypeDisplay::new(expected, name_table),
-                        TypeDisplay::new(found, name_table)
+                        TypeDisplay::new(expected.clone(), name_table),
+                        TypeDisplay::new(found.clone(), name_table)
                     )),
                 ]),
             TypeError::OccursCheck(var, ty, span) => Diagnostic::error()
                 .with_message("infinite type detected")
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("recursive type: `'{}` occurs in `{}`", var, TypeDisplay::new(ty, name_table))),
+                        .with_message(format!("recursive type: `'{}` occurs in `{}`", var, TypeDisplay::new(ty.clone(), name_table))),
                 ]),
             TypeError::UnboundVariable(name, span) => {
                 let display_name = name_table.lookup_name(name);
@@ -139,8 +139,8 @@ pub fn report_type_errors(
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end).with_message(format!(
                         "records have different fields: `{}` vs `{}`",
-                        TypeDisplay::new(t1, name_table),
-                        TypeDisplay::new(t2, name_table)
+                        TypeDisplay::new(t1.clone(), name_table),
+                        TypeDisplay::new(t2.clone(), name_table)
                     )),
                 ])
                 .with_notes(vec![
@@ -150,7 +150,7 @@ pub fn report_type_errors(
                 .with_message("field access on non-record type")
                 .with_labels(vec![
                     Label::primary(file_id, span.start..span.end)
-                        .with_message(format!("cannot access field on type `{}`", TypeDisplay::new(ty, name_table))),
+                        .with_message(format!("cannot access field on type `{}`", TypeDisplay::new(ty.clone(), name_table))),
                 ])
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),
@@ -188,6 +188,17 @@ pub fn report_type_errors(
                 ])
                 .with_notes(vec![
                     "constructors must have function types that take an argument and return the variant type".to_string(),
+                ]),
+            TypeError::KindMismatch(found, expected, span) => Diagnostic::error()
+                .with_message("kind mismatch")
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end).with_message(format!(
+                        "expected kind `{:?}`, found kind `{:?}`",
+                        expected, found
+                    )),
+                ])
+                .with_notes(vec![
+                    "kinds must match when unifying types".to_string(),
                 ]),
         };
 

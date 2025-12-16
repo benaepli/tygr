@@ -88,12 +88,17 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
         Ok(r) => r,
     };
 
-    // Extract the name table for error reporting
     let name_table = resolver.into_name_table();
 
     let mut inferrer = Inferrer::new();
     for variant in resolved_variants {
-        inferrer.register_variant(variant);
+        match inferrer.register_variant(variant) {
+            Err(e) => {
+                report_type_errors(input, &[e], name, &name_table)?;
+                return Err(anyhow!("type inference error"));
+            }
+            Ok(t) => t,
+        }
     }
 
     let typed = match inferrer.infer(resolved) {

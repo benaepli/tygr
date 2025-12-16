@@ -1,5 +1,7 @@
-let map = fix(fn self => fn f => fn ls => match ls with
+let map[a] = fix(fn self => fn f => fn ls: list[a] => match ls with
     | hd::tl => (f hd)::(self f tl)
     | [] => [])
 
 let result = map (fn x => 2 * x) (3::5::[])
+
+let x: int[int] -> int[int] = fn x => x

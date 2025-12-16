@@ -1,4 +1,4 @@
-use crate::analysis::inference::{Type, TypeScheme};
+use crate::analysis::inference::{Kind, Type, TypeKind, TypeScheme};
 use crate::analysis::resolver::TypeName;
 use phf::Map;
 use phf_macros::phf_map;
@@ -91,15 +91,19 @@ pub static BUILTINS: Map<&'static str, BuiltinFn> = phf_map! {
     "^" => BuiltinFn::StringConcat,
 };
 
-fn mono(ty: Type) -> TypeScheme {
-    TypeScheme {
-        vars: vec![],
-        ty: Rc::new(ty),
-    }
+fn mono(ty: Rc<Type>) -> TypeScheme {
+    TypeScheme { vars: vec![], ty }
 }
 
-fn func(a: Type, b: Type) -> Type {
-    Type::Function(Rc::new(a), Rc::new(b))
+fn con(name: TypeName) -> Rc<Type> {
+    Type::simple(name)
+}
+
+fn func(a: Rc<Type>, b: Rc<Type>) -> Rc<Type> {
+    Type::new(
+        TypeKind::Function(a.clone(), b.clone()),
+        Rc::new(Kind::Star),
+    )
 }
 
 pub static INT_TYPE: TypeName = TypeName(0);
@@ -118,6 +122,24 @@ pub static BUILTIN_TYPES: Map<&'static str, TypeName> = phf_map! {
     "list" => LIST_TYPE,
 };
 
+pub fn builtin_kinds(name: TypeName) -> Option<Rc<Kind>> {
+    if name == INT_TYPE
+        || name == FLOAT_TYPE
+        || name == BOOL_TYPE
+        || name == STRING_TYPE
+        || name == UNIT_TYPE
+    {
+        Some(Rc::new(Kind::Star))
+    } else if name == LIST_TYPE {
+        Some(Rc::new(Kind::Arrow(
+            Rc::new(Kind::Star),
+            Rc::new(Kind::Star),
+        )))
+    } else {
+        None
+    }
+}
+
 pub static TYPE_BASE: TypeName = TypeName(BUILTIN_TYPES.len());
 
 impl BuiltinFn {
@@ -125,47 +147,39 @@ impl BuiltinFn {
         use BuiltinFn::*;
 
         match self {
-            IntAdd | IntSubtract | IntMultiply | IntDivide => mono(func(
-                Type::Con(INT_TYPE),
-                func(Type::Con(INT_TYPE), Type::Con(INT_TYPE)),
-            )),
+            IntAdd | IntSubtract | IntMultiply | IntDivide => {
+                mono(func(con(INT_TYPE), func(con(INT_TYPE), con(INT_TYPE))))
+            }
             FloatAdd | FloatSubtract | FloatMultiply | FloatDivide => mono(func(
-                Type::Con(FLOAT_TYPE),
-                func(Type::Con(FLOAT_TYPE), Type::Con(FLOAT_TYPE)),
+                con(FLOAT_TYPE),
+                func(con(FLOAT_TYPE), con(FLOAT_TYPE)),
             )),
 
             IntEqual | IntNotEqual | IntLessEqual | IntGreaterEqual | IntLess | IntGreater => {
-                mono(func(
-                    Type::Con(INT_TYPE),
-                    func(Type::Con(INT_TYPE), Type::Con(BOOL_TYPE)),
-                ))
+                mono(func(con(INT_TYPE), func(con(INT_TYPE), con(BOOL_TYPE))))
             }
             FloatEqual | FloatNotEqual | FloatLessEqual | FloatGreaterEqual | FloatLess
-            | FloatGreater => mono(func(
-                Type::Con(FLOAT_TYPE),
-                func(Type::Con(FLOAT_TYPE), Type::Con(BOOL_TYPE)),
-            )),
-            BoolEqual | BoolNotEqual => mono(func(
-                Type::Con(BOOL_TYPE),
-                func(Type::Con(BOOL_TYPE), Type::Con(BOOL_TYPE)),
-            )),
+            | FloatGreater => mono(func(con(FLOAT_TYPE), func(con(FLOAT_TYPE), con(BOOL_TYPE)))),
+            BoolEqual | BoolNotEqual => {
+                mono(func(con(BOOL_TYPE), func(con(BOOL_TYPE), con(BOOL_TYPE))))
+            }
 
-            IntNegate => mono(func(Type::Con(INT_TYPE), Type::Con(INT_TYPE))),
-            FloatNegate => mono(func(Type::Con(FLOAT_TYPE), Type::Con(FLOAT_TYPE))),
-            Not => mono(func(Type::Con(BOOL_TYPE), Type::Con(BOOL_TYPE))),
+            IntNegate => mono(func(con(INT_TYPE), con(INT_TYPE))),
+            FloatNegate => mono(func(con(FLOAT_TYPE), con(FLOAT_TYPE))),
+            Not => mono(func(con(BOOL_TYPE), con(BOOL_TYPE))),
 
             StringConcat => mono(func(
-                Type::Con(STRING_TYPE),
-                func(Type::Con(STRING_TYPE), Type::Con(STRING_TYPE)),
+                con(STRING_TYPE),
+                func(con(STRING_TYPE), con(STRING_TYPE)),
             )),
 
-            Print => mono(func(Type::Con(STRING_TYPE), Type::Con(STRING_TYPE))),
-            StringOfFloat => mono(func(Type::Con(FLOAT_TYPE), Type::Con(STRING_TYPE))),
-            StringOfInt => mono(func(Type::Con(INT_TYPE), Type::Con(STRING_TYPE))),
-            FloatOfInt => mono(func(Type::Con(INT_TYPE), Type::Con(FLOAT_TYPE))),
-            Floor => mono(func(Type::Con(FLOAT_TYPE), Type::Con(INT_TYPE))),
-            Ceil => mono(func(Type::Con(FLOAT_TYPE), Type::Con(INT_TYPE))),
-            TimeMicro => mono(func(Type::Con(UNIT_TYPE), Type::Con(INT_TYPE))),
+            Print => mono(func(con(STRING_TYPE), con(STRING_TYPE))),
+            StringOfFloat => mono(func(con(FLOAT_TYPE), con(STRING_TYPE))),
+            StringOfInt => mono(func(con(INT_TYPE), con(STRING_TYPE))),
+            FloatOfInt => mono(func(con(INT_TYPE), con(FLOAT_TYPE))),
+            Floor => mono(func(con(FLOAT_TYPE), con(INT_TYPE))),
+            Ceil => mono(func(con(FLOAT_TYPE), con(INT_TYPE))),
+            TimeMicro => mono(func(con(UNIT_TYPE), con(INT_TYPE))),
         }
     }
 }
