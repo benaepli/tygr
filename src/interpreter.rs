@@ -66,9 +66,10 @@ impl fmt::Debug for Value {
                 debug_map.finish()
             }
             Value::Constructor(_def_id, name) => write!(f, "<constructor:{}>", name),
-            Value::Variant(val, _def_id, name) => {
-                f.debug_tuple(&format!("Variant::{}", name)).field(val).finish()
-            }
+            Value::Variant(val, _def_id, name) => f
+                .debug_tuple(&format!("Variant::{}", name))
+                .field(val)
+                .finish(),
         }
     }
 }
@@ -549,9 +550,11 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
                 }))
             }
         }
-        Value::Constructor(variant_id, ctor_id) => {
-            Ok(Rc::new(Value::Variant(arg, variant_id.clone(), ctor_id.clone())))
-        }
+        Value::Constructor(variant_id, ctor_id) => Ok(Rc::new(Value::Variant(
+            arg,
+            variant_id.clone(),
+            ctor_id.clone(),
+        ))),
         _ => Err(EvalError::NotAFunction),
     }
 }

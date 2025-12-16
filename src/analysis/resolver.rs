@@ -1,6 +1,7 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Variant, Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
+    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
+    Variant,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -434,16 +435,26 @@ impl Resolver {
         Ok(())
     }
 
-    pub fn resolve_variant(&mut self, variant: Variant) -> Result<ResolvedVariant, ResolutionError> {
+    pub fn declare_variant(&mut self, variant: &Variant) -> Result<(), ResolutionError> {
         if self.variants.contains_key(&variant.name) {
-            return Err(ResolutionError::DuplicateVariant(variant.name, variant.span));
+            return Err(ResolutionError::DuplicateVariant(
+                variant.name.clone(),
+                variant.span,
+            ));
         }
         let def_id = self.new_id();
         self.variants.insert(variant.name.clone(), def_id);
         self.type_name_origins.insert(def_id, variant.name.clone());
+        Ok(())
+    }
+
+    pub fn define_variant(&mut self, variant: Variant) -> Result<ResolvedVariant, ResolutionError> {
+        let def_id = *self
+            .variants
+            .get(&variant.name)
+            .expect("Variant name should have been declared");
 
         let mut constructors = HashMap::new();
-
         let mut type_scope = HashMap::new();
         let mut generic_ids = Vec::new();
 
@@ -537,7 +548,10 @@ impl Resolver {
                 let mut resolved = HashMap::new();
                 for (field_name, field_pattern) in fields {
                     if resolved.contains_key(&field_name) {
-                        return Err(ResolutionError::DuplicateRecordField(field_name.clone(), span));
+                        return Err(ResolutionError::DuplicateRecordField(
+                            field_name.clone(),
+                            span,
+                        ));
                     }
                     resolved.insert(field_name, self.analyze_pattern(field_pattern, scope)?);
                 }

@@ -259,10 +259,8 @@ impl Inferrer {
 
     fn apply_wrap(&self, ty: Rc<Type>, types: &[Rc<Type>]) -> Rc<Type> {
         match types.split_first() {
-            Some((head, tail)) => {
-                self.apply_wrap(Rc::new(Type::App(ty, head.clone())), tail)
-            }
-            None => ty
+            Some((head, tail)) => self.apply_wrap(Rc::new(Type::App(ty, head.clone())), tail),
+            None => ty,
         }
     }
 
