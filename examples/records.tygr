@@ -1,2 +1,2 @@
 type record[a][b] = {field1: b, field2: a}
-let b: record[int][string] = { field1: "0", field2: 0 }
+let b: record[int][string] = { field1: "happy", field2: 0 }
