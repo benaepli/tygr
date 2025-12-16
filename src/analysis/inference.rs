@@ -34,7 +34,7 @@ impl fmt::Display for TypeID {
 
 #[derive(Debug, Clone)]
 pub struct TypeScheme {
-    pub vars: Vec<TypeID>,
+    pub vars: Vec<(TypeID, Rc<Kind>)>,
     pub ty: Rc<Type>,
 }
 
@@ -315,7 +315,10 @@ impl Inferrer {
         }
     }
 
-    pub fn instantiate_annotation(&mut self, annot: &ResolvedAnnotation) -> Result<Rc<Type>, TypeError> {
+    pub fn instantiate_annotation(
+        &mut self,
+        annot: &ResolvedAnnotation,
+    ) -> Result<Rc<Type>, TypeError> {
         match &annot.kind {
             ResolvedAnnotationKind::Var(name) => {
                 if let Some(ty) = self.type_ctx.get(name) {
@@ -417,6 +420,12 @@ impl Inferrer {
         }
 
         let variant_ty = Type::new(TypeKind::Con(variant.name), variant_kind);
+
+        let scheme_vars: Vec<(TypeID, Rc<Kind>)> = params
+            .iter()
+            .zip(param_types.iter())
+            .map(|(id, ty)| (*id, self.apply_kind_subst(&ty.kind)))
+            .collect();
         let mut schemes = HashMap::new();
 
         for (name, arg_ty) in inferred_constructors {
@@ -425,7 +434,7 @@ impl Inferrer {
             schemes.insert(
                 name,
                 TypeScheme {
-                    vars: params.clone(),
+                    vars: scheme_vars.clone(),
                     ty: Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
                 },
             );
@@ -478,8 +487,8 @@ impl Inferrer {
 
     fn instantiate(&mut self, scheme: &TypeScheme) -> Rc<Type> {
         let mut mapping = HashMap::new();
-        for &var in &scheme.vars {
-            mapping.insert(var, Type::new(self.new_type(), self.new_kind()));
+        for (var, kind) in &scheme.vars {
+            mapping.insert(*var, Type::new(self.new_type(), kind.clone()));
         }
         self.instantiate_with_mapping(&scheme.ty, &mapping)
     }
@@ -589,44 +598,34 @@ impl Inferrer {
         Ok(())
     }
 
-    fn free_in_type(&self, ty: &Rc<Type>) -> HashSet<TypeID> {
+    fn free_in_type(&self, ty: &Rc<Type>) -> HashMap<TypeID, Rc<Kind>> {
         let ty = self.apply_subst(ty);
         match &ty.ty {
             TypeKind::Var(id) => {
-                let mut set = HashSet::new();
-                set.insert(*id);
-                set
+                let mut map = HashMap::new();
+                map.insert(*id, ty.kind.clone());
+                map
             }
-            TypeKind::Pair(a, b) => {
-                let mut set = self.free_in_type(a);
-                set.extend(self.free_in_type(b));
-                set
-            }
-            TypeKind::Function(arg, ret) => {
-                let mut set = self.free_in_type(arg);
-                set.extend(self.free_in_type(ret));
-                set
-            }
-            TypeKind::App(lhs, rhs) => {
-                let mut set = self.free_in_type(lhs);
-                set.extend(self.free_in_type(rhs));
-                set
+            TypeKind::Pair(a, b) | TypeKind::Function(a, b) | TypeKind::App(a, b) => {
+                let mut map = self.free_in_type(a);
+                map.extend(self.free_in_type(b));
+                map
             }
             TypeKind::Record(fields) => {
-                let mut set = HashSet::new();
+                let mut map = HashMap::new();
                 for ty in fields.values() {
-                    set.extend(self.free_in_type(ty));
+                    map.extend(self.free_in_type(ty));
                 }
-                set
+                map
             }
-            TypeKind::Con(_) => HashSet::new(),
+            TypeKind::Con(_) => HashMap::new(),
         }
     }
 
-    fn free_in_scheme(&self, scheme: &TypeScheme) -> HashSet<TypeID> {
+    fn free_in_scheme(&self, scheme: &TypeScheme) -> HashMap<TypeID, Rc<Kind>> {
         let mut free = self.free_in_type(&scheme.ty);
-        for &var in &scheme.vars {
-            free.remove(&var);
+        for (var, _) in &scheme.vars {
+            free.remove(var);
         }
         free
     }
@@ -634,15 +633,18 @@ impl Inferrer {
     fn free_in_env(&self, env: &Environment) -> HashSet<TypeID> {
         let mut free = HashSet::new();
         for scheme in env.values() {
-            free.extend(self.free_in_scheme(scheme));
+            let vars = self.free_in_scheme(scheme);
+            free.extend(vars.keys());
         }
         free
     }
-
     fn generalize(&self, env: &Environment, ty: &Rc<Type>) -> TypeScheme {
         let type_vars = self.free_in_type(ty);
         let env_vars = self.free_in_env(env);
-        let vars: Vec<TypeID> = type_vars.difference(&env_vars).copied().collect();
+        let vars: Vec<(TypeID, Rc<Kind>)> = type_vars
+            .into_iter()
+            .filter(|(id, _)| !env_vars.contains(id))
+            .collect();
         TypeScheme {
             vars,
             ty: ty.clone(),

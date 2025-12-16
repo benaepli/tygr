@@ -1,0 +1,4 @@
+enum var[a] =
+    | Some(a[int])
+
+let x: var[list] = Some(2::[])
