@@ -44,7 +44,6 @@ factor ::= factor ( '*' | '/' | '*.' | '/.' ) apply | apply
 
 apply ::=
       apply primary
-    | 'fix' unary
     | unary
 
 unary ::=

@@ -1,13 +1,13 @@
 type mylist = list
 
-let fold_right[a][b]: (a -> b -> b) -> mylist[a] -> b -> b = fix(fn self => fn f => fn ls => fn x => match ls with
+let fold_right[a][b]: (a -> b -> b) -> mylist[a] -> b -> b = rec self => fn f => fn ls => fn x => match ls with
     | [] => x
-    | hd::tl => f hd (self f tl x))
+    | hd::tl => f hd (self f tl x)
 
 let result_b = fold_right (fn x => fn acc => if x then acc else !acc) (true::false::[]) true
 
-let fold_left = fix(fn self => fn f => fn acc => fn ls => match ls with
+let fold_left = rec self => fn f => fn acc => fn ls => match ls with
     | [] => acc
-    | hd::tl => self f (f acc hd) tl)
+    | hd::tl => self f (f acc hd) tl
 
 let result_l = fold_left (fn acc => fn x => acc + x) 0 (3::5::[])

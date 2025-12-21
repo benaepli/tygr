@@ -23,12 +23,6 @@ pub enum Value {
         body: Box<Typed>,
         env: Environment,
     },
-    /// A recursive function value created by a `Fix` expression. It captures the
-    /// generator expression `f` from `fix(f)`.
-    RecursiveClosure {
-        generator_expr: Box<Typed>,
-        captured_env: Environment,
-    },
     /// A partially-applied built-in function, collecting arguments.
     PartialBuiltin {
         func: BuiltinFn,
@@ -52,7 +46,6 @@ impl fmt::Debug for Value {
             Value::List(v) => f.debug_list().entries(v.iter()).finish(),
             Value::Pair(a, b) => f.debug_tuple("Pair").field(a).field(b).finish(),
             Value::Closure { .. } => write!(f, "<closure>"),
-            Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { func, args } => f
                 .debug_struct("PartialBuiltin")
                 .field("func", func)
@@ -111,7 +104,6 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
                 ValueDisplay::new(b, self.name_table)
             ),
             Value::Closure { .. } => write!(f, "<closure>"),
-            Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { .. } => write!(f, "<partial_builtin>"),
             Value::Builtin(_) => write!(f, "<builtin>"),
             Value::Record(fields) => {
@@ -520,16 +512,6 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
             bind_pattern(param, arg, &mut new_env)?;
             eval(body, &mut new_env)
         }
-        Value::RecursiveClosure {
-            generator_expr,
-            captured_env,
-        } => {
-            // A recursive closure `fix(f)` applied to an argument `x`
-            // behaves like `(f (fix f)) x`.
-            let generator_val = eval(generator_expr, &mut captured_env.clone())?;
-            let actual_func = apply(generator_val, func.clone())?;
-            apply(actual_func, arg)
-        }
         Value::Builtin(b) => {
             let arity = builtin_arity(b);
             if arity == 1 {
@@ -621,14 +603,6 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             let func_val = eval(func_expr, env)?;
             let arg_val = eval(arg_expr, env)?;
             apply(func_val, arg_val)
-        }
-        TypedKind::Fix(generator_expr) => {
-            // The value of `fix(f)` is a special `RecursiveClosure` value.
-            // It captures the expression `f` and the current environment.
-            Ok(Rc::new(Value::RecursiveClosure {
-                generator_expr: generator_expr.clone(),
-                captured_env: env.clone(),
-            }))
         }
         TypedKind::BinOp(op, lhs, rhs) => {
             let left = eval(lhs, env)?;

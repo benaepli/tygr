@@ -164,7 +164,6 @@ pub enum TypedKind {
         value: Box<Typed>,
         body: Box<Typed>,
     },
-    Fix(Box<Typed>),
     If(Box<Typed>, Box<Typed>, Box<Typed>),
     Match(Box<Typed>, Vec<TypedMatchPattern>),
     Cons(Box<Typed>, Box<Typed>),
@@ -919,38 +918,6 @@ impl Inferrer {
                         body: Box::new(typed_body),
                     },
                     ty: body_ty,
-                    span,
-                })
-            }
-
-            ResolvedKind::Fix(inner_expr) => {
-                let typed_expr = self.infer_type(env, *inner_expr)?;
-                let a = Type::new(self.new_type(), Rc::new(Kind::Star));
-
-                // Constraint 1: The expression must have type 'a -> 'a.
-                let expected_generator_ty = Type::new(
-                    TypeKind::Function(a.clone(), a.clone()),
-                    Rc::new(Kind::Star),
-                );
-                self.unify(&typed_expr.ty, &expected_generator_ty, span)?;
-
-                // Constraint 2: 'a' must itself be a function.
-                // This prevents using `fix` on simple values.
-                let function_shape = Rc::new(Type::new(
-                    TypeKind::Function(
-                        Type::new(self.new_type(), Rc::new(Kind::Star)),
-                        Type::new(self.new_type(), Rc::new(Kind::Star)),
-                    ),
-                    Rc::new(Kind::Star),
-                ));
-                self.unify(&a, &function_shape, span)?;
-
-                // The final type is 'a', which is now guaranteed to be a function.
-                let result_ty = self.apply_subst(&a);
-
-                Ok(Typed {
-                    kind: TypedKind::Fix(Box::new(typed_expr)),
-                    ty: result_ty,
                     span,
                 })
             }

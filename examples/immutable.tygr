@@ -22,10 +22,9 @@ let result1 = add5 10  // => 15
 let result2 = add5 20  // => 25
 
 // Recursive functions work with immutable values
-let sum_to_n = fix (fn self => fn n =>
+let sum_to_n = rec self => fn n =>
     if n == 0
     then 0
     else n + self (n - 1)
-)
 
 let total = sum_to_n 10  // => 55

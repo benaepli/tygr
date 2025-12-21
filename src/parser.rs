@@ -133,7 +133,6 @@ pub enum ExprKind {
         Vec<Generic>,
         Option<Annotation>,
     ),
-    Fix(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<MatchBranch>),
 
@@ -448,14 +447,7 @@ where
         });
 
         let apply = {
-            let fix_or_unary = choice((
-                just(TokenKind::Fix)
-                    .ignore_then(unary.clone())
-                    .map_with(|e, extra| Expr::new(ExprKind::Fix(Box::new(e)), extra.span())),
-                unary.clone(),
-            ));
-
-            fix_or_unary.clone().foldl(postfix.repeated(), |func, arg| {
+            unary.clone().foldl(postfix.repeated(), |func, arg| {
                 let span = func.span.union(arg.span);
                 Expr::new(ExprKind::App(Box::new(func), Box::new(arg)), span)
             })

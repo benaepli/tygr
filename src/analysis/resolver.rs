@@ -120,7 +120,6 @@ pub enum ResolvedKind {
         value_type: Option<ResolvedAnnotation>,
         type_params: Vec<TypeName>,
     },
-    Fix(Box<Resolved>),
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
     Match(Box<Resolved>, Vec<ResolvedMatchBranch>),
     Cons(Box<Resolved>, Box<Resolved>),
@@ -696,13 +695,6 @@ impl Resolver {
                         span,
                     ),
                     all,
-                ))
-            }
-            ExprKind::Fix(e) => {
-                let (resolved, free) = self.analyze(*e)?;
-                Ok((
-                    Resolved::new(ResolvedKind::Fix(Box::new(resolved)), span),
-                    free,
                 ))
             }
             ExprKind::If(condition, consequent, alternative) => {

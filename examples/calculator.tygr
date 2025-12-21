@@ -7,7 +7,7 @@ enum Expr =
   | Add((Expr, Expr))
   | Div((Expr, Expr))
 
-let eval = fix (fn f => fn e =>
+let eval = rec f => fn e =>
   match e with
   | Val(n) => Some(n)
   | Add((l, r)) => (
@@ -21,6 +21,5 @@ let eval = fix (fn f => fn e =>
             if rv == 0 then None() else Some(lv / rv)
         | _ => None()
   )
-)
 
 let result = eval (Add((Val(10), Val(20))))
