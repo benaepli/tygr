@@ -179,6 +179,7 @@ pub enum TypedKind {
     RecordLit(BTreeMap<String, Typed>),
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
+    RecRecord(BTreeMap<String, (Name, Typed)>),
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
@@ -1084,6 +1085,56 @@ impl Inferrer {
                 Ok(Typed {
                     kind: TypedKind::BinOp(op, Box::new(typed_left), Box::new(typed_right)),
                     ty: Type::simple(BOOL_TYPE),
+                    span,
+                })
+            }
+
+            ResolvedKind::RecRecord(fields) => {
+                let mut assumed_types = HashMap::new();
+                let mut extended_env = env.clone();
+                let mut field_names = BTreeMap::new();
+
+                for (field_label, (name_id, _)) in &fields {
+                    let arg_ty = self.new_type();
+                    let ret_ty = self.new_type();
+                    let func_ty = Type::new(
+                        TypeKind::Function(
+                            Type::new(arg_ty, Rc::new(Kind::Star)),
+                            Type::new(ret_ty, Rc::new(Kind::Star)),
+                        ),
+                        Rc::new(Kind::Star),
+                    );
+
+                    let scheme = TypeScheme {
+                        vars: vec![],
+                        ty: func_ty.clone(),
+                    };
+
+                    assumed_types.insert(*name_id, func_ty.clone());
+                    extended_env.insert(*name_id, scheme);
+                    field_names.insert(field_label.clone(), func_ty);
+                }
+
+                let mut typed_fields = BTreeMap::new();
+                for (field_label, (name_id, resolved_expr)) in fields {
+                    let typed_expr = self.infer_type(&extended_env, resolved_expr)?;
+
+                    let assumed_ty = assumed_types.get(&name_id).unwrap();
+                    self.unify(assumed_ty, &typed_expr.ty, typed_expr.span)?;
+
+                    typed_fields.insert(field_label, (name_id, typed_expr));
+                }
+
+                let mut final_field_types = BTreeMap::new();
+                for (label, assumed_ty) in field_names {
+                    let inferred_ty = self.apply_subst(&assumed_ty);
+                    final_field_types.insert(label, inferred_ty);
+                }
+                let record_ty = Type::new(TypeKind::Record(final_field_types), Rc::new(Kind::Star));
+
+                Ok(Typed {
+                    kind: TypedKind::RecRecord(typed_fields),
+                    ty: record_ty,
                     span,
                 })
             }

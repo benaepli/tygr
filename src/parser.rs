@@ -147,6 +147,7 @@ pub enum ExprKind {
     RecordLit(Vec<(String, Expr)>),
 
     BinOp(BinOp, Box<Expr>, Box<Expr>),
+    RecRecord(Vec<(String, Expr)>),
     Cons(Box<Expr>, Box<Expr>),
     FieldAccess(Box<Expr>, String),
 }
@@ -254,10 +255,6 @@ where
             }
             .map_with(|kind, e| Annotation::new(kind, e.span()));
 
-            let paren = just(TokenKind::LeftParen)
-                .ignore_then(annot.clone())
-                .then_ignore(just(TokenKind::RightParen));
-
             let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
             let field = ident
@@ -273,7 +270,26 @@ where
                 .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
                 .map_with(|fields, e| Annotation::new(AnnotationKind::Record(fields), e.span()));
 
-            choice((record, atom, paren))
+            let items = annot
+                .clone()
+                .separated_by(just(TokenKind::Comma))
+                .collect::<Vec<_>>();
+
+            let tuple = items
+                .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen))
+                .map_with(|mut annots: Vec<Annotation>, _e| {
+                    if annots.len() == 1 {
+                        annots.pop().unwrap()
+                    } else {
+                        let last = annots.pop().unwrap();
+                        annots.into_iter().rfold(last, |acc, a| {
+                            let span = a.span.union(acc.span);
+                            Annotation::new(AnnotationKind::Pair(Box::new(a), Box::new(acc)), span)
+                        })
+                    }
+                });
+
+            choice((record, atom, tuple))
         };
 
         let apply_parser = just(TokenKind::LeftBracket)
@@ -289,17 +305,7 @@ where
                 )
             });
 
-        let product = apply.clone().foldl_with(
-            just(TokenKind::Star).ignore_then(apply).repeated(),
-            |fst, snd, extra| {
-                Annotation::new(
-                    AnnotationKind::Pair(Box::new(fst), Box::new(snd)),
-                    extra.span(),
-                )
-            },
-        );
-
-        let arrow = product
+        let arrow = apply
             .clone()
             .separated_by(just(TokenKind::RightArrow))
             .at_least(1)
@@ -345,6 +351,14 @@ where
         let annotation_with_colon = just(TokenKind::Colon).ignore_then(annotation());
         let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
+        let field = ident
+            .clone()
+            .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
+            .map_with(|(name, value_opt), e| match value_opt {
+                Some(value) => (name, value),
+                None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
+            });
+
         let simple = {
             let atom = choice((
                 select! {
@@ -382,15 +396,8 @@ where
                     }
                 });
 
-            let field = ident
-                .clone()
-                .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
-                .map_with(|(name, value_opt), e| match value_opt {
-                    Some(value) => (name, value),
-                    None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
-                });
-
             let record_lit = field
+                .clone()
                 .separated_by(just(TokenKind::Comma))
                 .allow_trailing()
                 .collect::<Vec<_>>()
@@ -602,7 +609,26 @@ where
                 Expr::new(ExprKind::Match(Box::new(expr), others), extra.span())
             });
 
-        choice((let_expr, if_expr, lambda_expr, match_expr, or))
+        let rec_expr = just(TokenKind::Rec).ignore_then(choice((
+            field
+                .clone()
+                .separated_by(just(TokenKind::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                .map_with(|fields, e| Expr::new(ExprKind::RecRecord(fields), e.span())),
+            ident
+                .clone()
+                .then_ignore(just(TokenKind::Lambda))
+                .then(expr.clone())
+                .map_with(|(name, body), e| {
+                    let span = e.span();
+                    let rec_node = Expr::new(ExprKind::RecRecord(vec![(name.clone(), body)]), span);
+                    Expr::new(ExprKind::FieldAccess(Box::new(rec_node), name), span)
+                }),
+        )));
+
+        choice((let_expr, if_expr, lambda_expr, match_expr, rec_expr, or))
     })
 }
 

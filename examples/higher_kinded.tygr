@@ -2,3 +2,7 @@ enum var[a] =
     | Some(a[int])
 
 let x: var[list] = Some(2::[])
+
+let f[a]: a[int] -> a[int] = fn x: a[int] => x
+let g = f
+let result = g(0::[])

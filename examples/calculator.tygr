@@ -4,8 +4,8 @@ enum Option[t] =
 
 enum Expr =
   | Val(int)
-  | Add(Expr * Expr)
-  | Div(Expr * Expr)
+  | Add((Expr, Expr))
+  | Div((Expr, Expr))
 
 let eval = fix (fn f => fn e =>
   match e with

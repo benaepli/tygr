@@ -3,6 +3,7 @@ use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -172,7 +173,7 @@ pub type EvalResult = Result<Rc<Value>, EvalError>;
 /// The execution environment, mapping names to values.
 #[derive(Debug, Clone)]
 pub struct Environment {
-    bindings: HashMap<Name, Rc<Value>>,
+    bindings: HashMap<Name, Rc<RefCell<Rc<Value>>>>,
 }
 
 impl Environment {
@@ -183,11 +184,15 @@ impl Environment {
     }
 
     pub fn get(&self, name: &Name) -> Option<Rc<Value>> {
-        self.bindings.get(name).cloned()
+        self.bindings.get(name).map(|cell| cell.borrow().clone())
+    }
+
+    pub fn insert_cell(&mut self, name: Name, cell: Rc<RefCell<Rc<Value>>>) {
+        self.bindings.insert(name, cell);
     }
 
     pub fn insert(&mut self, name: Name, value: Rc<Value>) {
-        self.bindings.insert(name, value);
+        self.bindings.insert(name, Rc::new(RefCell::new(value)));
     }
 }
 
@@ -637,9 +642,9 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             let v2 = eval(e2, env)?;
             match &*v2 {
                 Value::List(list) => {
-                    let mut new_list = list.clone();
-                    new_list.push(v1);
-                    Ok(Rc::new(Value::List(new_list)))
+                    let new_list = vec![v1];
+                    let combined = new_list.iter().chain(list.iter()).cloned().collect();
+                    Ok(Rc::new(Value::List(combined)))
                 }
                 _ => Err(EvalError::TypeMismatch(
                     "Cons second argument must be a list".into(),
@@ -671,6 +676,36 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         }
         &TypedKind::Constructor(variant_id, ctor_id) => {
             Ok(Rc::new(Value::Constructor(variant_id, ctor_id)))
+        }
+
+        TypedKind::RecRecord(fields) => {
+            let mut placeholders = Vec::new();
+            let mut rec_env = env.clone();
+
+            // Placeholders
+            for (_label, (name_id, _expr)) in fields.iter() {
+                let placeholder = Rc::new(RefCell::new(Rc::new(Value::Unit)));
+                rec_env.insert_cell(*name_id, placeholder.clone());
+                placeholders.push((*name_id, placeholder));
+            }
+
+            // Evaluate in the new environment where names point to placeholders.
+            let mut evaluated_results = Vec::new();
+            for (label, (name_id, expr)) in fields {
+                let val = eval(expr, &mut rec_env)?;
+                evaluated_results.push((label, name_id, val));
+            }
+
+            // Update the RefCells with the actual evaluated values.
+            let mut record_map = HashMap::new();
+            for (label, name_id, actual_val) in evaluated_results {
+                let placeholder_cell = rec_env.bindings.get(&name_id).unwrap();
+                *placeholder_cell.borrow_mut() = actual_val.clone();
+
+                record_map.insert(label.clone(), (*actual_val).clone());
+            }
+
+            Ok(Rc::new(Value::Record(record_map)))
         }
     }
 }

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Name(pub usize);
 
 impl fmt::Display for Name {
@@ -135,6 +135,7 @@ pub enum ResolvedKind {
     RecordLit(HashMap<String, Resolved>),
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
+    RecRecord(HashMap<String, (Name, Resolved)>),
     FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
@@ -644,6 +645,45 @@ impl Resolver {
                         span,
                     ),
                     all,
+                ))
+            }
+            ExprKind::RecRecord(fields) => {
+                let mut all_free = HashSet::new();
+                let mut new_scope = HashMap::new();
+                let mut name_to_string = HashMap::new();
+
+                // Pre-declare all labels in a new scope to allow for mutual recursion
+                for (name_str, _) in &fields {
+                    if new_scope.contains_key(name_str) {
+                        return Err(ResolutionError::DuplicateRecordField(
+                            name_str.clone(),
+                            span,
+                        ));
+                    }
+                    let new_id = self.new_name();
+                    self.name_origins.insert(new_id, name_str.clone());
+                    new_scope.insert(name_str.clone(), new_id);
+                    name_to_string.insert(new_id, name_str.clone());
+                }
+
+                self.scopes.push(new_scope.clone());
+                let mut resolved_fields = HashMap::new();
+
+                for (name_str, expr) in fields {
+                    let (resolved_expr, free_vars) = self.analyze(expr)?;
+                    let name_id = *new_scope.get(&name_str).unwrap();
+                    resolved_fields.insert(name_str, (name_id, resolved_expr));
+                    all_free.extend(free_vars);
+                }
+                self.scopes.pop();
+
+                for name_id in new_scope.values() {
+                    all_free.remove(name_id);
+                }
+
+                Ok((
+                    Resolved::new(ResolvedKind::RecRecord(resolved_fields), span),
+                    all_free,
                 ))
             }
             ExprKind::App(func, arg) => {

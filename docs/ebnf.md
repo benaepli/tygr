@@ -17,7 +17,12 @@ expr ::=
     | 'if' expr 'then' expr 'else' expr
     | 'fn' pattern annotation? '=>' expr
     | 'match' expr 'with' match_branches
+    | 'rec' recursive_expr
     | or
+    
+recursive_expr ::=
+      IDENTIFIER '=>' expr
+    | '{' record_field ( ',' record_field )* '}'
     
 match_branches ::= ( '|' pattern '=>' expr )+
 
