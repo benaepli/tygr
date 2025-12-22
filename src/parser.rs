@@ -342,12 +342,83 @@ where
         .map(|generics| generics.unwrap_or_default())
 }
 
-fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>>
+fn param<'a, I>()
+-> impl Parser<'a, I, (Pattern, Option<Annotation>), extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    pattern().then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
+}
+
+fn let_binding<'a, I, P>(
+    expr_parser: P,
+) -> impl Parser<
+    'a,
+    I,
+    (Pattern, Expr, Vec<Generic>, Option<Annotation>),
+    extra::Err<Rich<'a, TokenKind>>,
+> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+{
+    just(TokenKind::Let)
+        .ignore_then(just(TokenKind::Rec).or_not())
+        .then(pattern())
+        .then(
+            param()
+                .then(
+                    just(TokenKind::Comma)
+                        .ignore_then(param())
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .map(|(first, mut rest)| {
+                    let mut args = vec![first];
+                    args.append(&mut rest);
+                    args
+                })
+                .or_not(),
+        )
+        .then(generics())
+        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
+        .then_ignore(just(TokenKind::Equal))
+        .then(expr_parser)
+        .map_with(
+            |(((((rec_token, pat), params_opt), generics), annot), val), e| {
+                let span = e.span();
+                let mut value_expr = if let Some(params) = params_opt {
+                    let mut iter = params.into_iter().rev();
+                    let (last_pat, last_annot) = iter.next().unwrap();
+                    let inner =
+                        Expr::new(ExprKind::Lambda(last_pat, Box::new(val), last_annot), span);
+                    iter.fold(inner, |acc, (p, a)| {
+                        Expr::new(ExprKind::Lambda(p, Box::new(acc), a), span)
+                    })
+                } else {
+                    val
+                };
+                if rec_token.is_some() {
+                    if let PatternKind::Var(name) = &pat.kind {
+                        let rec_node =
+                            Expr::new(ExprKind::RecRecord(vec![(name.clone(), value_expr)]), span);
+                        value_expr = Expr::new(
+                            ExprKind::FieldAccess(Box::new(rec_node), name.clone()),
+                            span,
+                        );
+                    }
+                }
+
+                (pat, value_expr, generics, annot)
+            },
+        )
+}
+
+fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     recursive(|expr| {
-        let annotation_with_colon = just(TokenKind::Colon).ignore_then(annotation());
         let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
         let field = ident
@@ -546,17 +617,12 @@ where
             },
         );
 
-        let let_expr = just(TokenKind::Let)
-            .ignore_then(pattern())
-            .then(generics())
-            .then(annotation_with_colon.clone().or_not())
-            .then_ignore(just(TokenKind::Equal))
-            .then(expr.clone())
+        let let_expr = let_binding(expr.clone())
             .then_ignore(just(TokenKind::In))
             .then(expr.clone())
-            .map_with(|((((pat, generics), annot), e1), e2), e| {
+            .map_with(|((pat, val, generics, annot), body), e| {
                 Expr::new(
-                    ExprKind::Let(pat, Box::new(e1), Box::new(e2), generics, annot),
+                    ExprKind::Let(pat, Box::new(val), Box::new(body), generics, annot),
                     e.span(),
                 )
             });
@@ -575,13 +641,71 @@ where
             });
 
         let lambda_expr = just(TokenKind::Fn)
-            .ignore_then(pattern())
-            .then(annotation_with_colon.clone().or_not())
+            .ignore_then(
+                param()
+                    .separated_by(just(TokenKind::Comma))
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
             .then_ignore(just(TokenKind::Lambda))
             .then(expr.clone())
-            .map_with(|((pat, annot), e), extra| {
-                Expr::new(ExprKind::Lambda(pat, Box::new(e), annot), extra.span())
+            .map_with(|(params, body), extra| {
+                let mut iter = params.into_iter().rev();
+                let (last_pat, last_annot) = iter.next().unwrap();
+
+                let span = extra.span();
+                let inner = Expr::new(ExprKind::Lambda(last_pat, Box::new(body), last_annot), span);
+
+                iter.fold(inner, |acc, (p, annot)| {
+                    let span = p.span.union(acc.span);
+                    Expr::new(ExprKind::Lambda(p, Box::new(acc), annot), span)
+                })
             });
+
+        let rec_expr = just(TokenKind::Rec).ignore_then(choice((
+            field
+                .clone()
+                .separated_by(just(TokenKind::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                .map_with(|fields, e| Expr::new(ExprKind::RecRecord(fields), e.span())),
+            ident
+                .clone()
+                .then(
+                    just(TokenKind::Comma)
+                        .ignore_then(
+                            param()
+                                .separated_by(just(TokenKind::Comma))
+                                .at_least(1)
+                                .collect::<Vec<_>>(),
+                        )
+                        .or_not(),
+                )
+                .then_ignore(just(TokenKind::Lambda))
+                .then(expr.clone())
+                .map_with(|((name, params_opt), body), e| {
+                    let span = e.span();
+                    let params = params_opt.unwrap_or_default();
+
+                    let func_body = if params.is_empty() {
+                        body
+                    } else {
+                        let mut iter = params.into_iter().rev();
+                        let (last_pat, last_annot) = iter.next().unwrap();
+                        let inner =
+                            Expr::new(ExprKind::Lambda(last_pat, Box::new(body), last_annot), span);
+                        iter.fold(inner, |acc, (p, annot)| {
+                            let s = p.span.union(acc.span);
+                            Expr::new(ExprKind::Lambda(p, Box::new(acc), annot), s)
+                        })
+                    };
+
+                    let rec_node =
+                        Expr::new(ExprKind::RecRecord(vec![(name.clone(), func_body)]), span);
+                    Expr::new(ExprKind::FieldAccess(Box::new(rec_node), name), span)
+                }),
+        )));
 
         let match_branch = just(TokenKind::Pipe)
             .ignore_then(pattern())
@@ -600,25 +724,6 @@ where
             .map_with(|(expr, others), extra| {
                 Expr::new(ExprKind::Match(Box::new(expr), others), extra.span())
             });
-
-        let rec_expr = just(TokenKind::Rec).ignore_then(choice((
-            field
-                .clone()
-                .separated_by(just(TokenKind::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
-                .map_with(|fields, e| Expr::new(ExprKind::RecRecord(fields), e.span())),
-            ident
-                .clone()
-                .then_ignore(just(TokenKind::Lambda))
-                .then(expr.clone())
-                .map_with(|(name, body), e| {
-                    let span = e.span();
-                    let rec_node = Expr::new(ExprKind::RecRecord(vec![(name.clone(), body)]), span);
-                    Expr::new(ExprKind::FieldAccess(Box::new(rec_node), name), span)
-                }),
-        )));
 
         choice((let_expr, if_expr, lambda_expr, match_expr, rec_expr, or))
     })
@@ -687,21 +792,13 @@ fn let_declaration<'a, I>() -> impl Parser<'a, I, LetDeclaration, extra::Err<Ric
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
-    just(TokenKind::Let)
-        .ignore_then(pattern())
-        .then(generics())
-        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
-        .then_ignore(just(TokenKind::Equal))
-        .then(expr())
-        .map_with(
-            |(((pattern, generics), annotation), value), extra| LetDeclaration {
-                pattern,
-                value,
-                generics,
-                annotation,
-                span: extra.span(),
-            },
-        )
+    let_binding(expr()).map_with(|(pattern, value, generics, annotation), e| LetDeclaration {
+        pattern,
+        value,
+        generics,
+        annotation,
+        span: e.span(),
+    })
 }
 
 fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>

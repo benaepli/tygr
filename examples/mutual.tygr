@@ -1,6 +1,6 @@
 let {is_even, is_odd} = rec {
-    is_even: fn decrement => fn base => fn n => if base n then true else is_odd decrement base (decrement n),
-    is_odd : fn decrement => fn base => fn n => if base n then false else is_even decrement base (decrement n)
+    is_even: fn decrement, base, n => if base n then true else is_odd decrement base (decrement n),
+    is_odd : fn decrement, base, n => if base n then false else is_even decrement base (decrement n)
 }
 
 let result = is_even (fn n => n - 1) (fn n => n == 0) 5

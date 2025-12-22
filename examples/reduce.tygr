@@ -1,10 +1,10 @@
 type mylist = list
 
-let fold_right[a][b]: (a -> b -> b) -> mylist[a] -> b -> b = rec self => fn f => fn ls => fn x => match ls with
+let fold_right = rec self, f, ls, x => match ls with
     | [] => x
     | hd::tl => f hd (self f tl x)
 
-let result_b = fold_right (fn x => fn acc => if x then acc else !acc) (true::false::[]) true
+let result_b = fold_right (fn x, acc => if x then acc else !acc) (true::false::[]) true
 
 let fold_left = rec self => fn f => fn acc => fn ls => match ls with
     | [] => acc
