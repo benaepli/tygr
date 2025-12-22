@@ -1,4 +1,6 @@
-use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind, TypedStatementKind};
+use crate::analysis::inference::{
+    Typed, TypedKind, TypedPattern, TypedPatternKind, TypedStatement, TypedStatementKind,
+};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
@@ -704,9 +706,19 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
     }
 }
 
-/// Main entry point for the interpreter.
 /// Creates an initial empty environment and starts evaluation.
-pub fn run(expr: &Typed) -> EvalResult {
+pub fn eval_expr(expr: &Typed) -> EvalResult {
     let mut initial_env = Environment::new();
     eval(expr, &mut initial_env)
+}
+
+pub fn eval_statement(env: &mut Environment, stmt: &TypedStatement) -> EvalResult {
+    match &stmt.kind {
+        TypedStatementKind::Let { pattern, value } => {
+            let val = eval(value, env)?;
+            bind_pattern(pattern, val.clone(), env)?;
+            Ok(val)
+        }
+        TypedStatementKind::Expr(expr) => eval(expr, env),
+    }
 }

@@ -87,17 +87,8 @@ pub struct Variant {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LetDeclaration {
-    pub pattern: Pattern,
-    pub value: Expr,
-    pub generics: Vec<Generic>,
-    pub annotation: Option<Annotation>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
-    Let(LetDeclaration),
+    Statement(Statement),
     Variant(Variant),
     Type(TypeAlias),
 }
@@ -448,17 +439,6 @@ where
                 None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
             });
 
-        let statement = choice((
-            let_binding(expr.clone()).map_with(|(pat, val, generics, annot), e| {
-                Statement::new(
-                    StatementKind::Let(pat, Box::new(val), generics, annot),
-                    e.span(),
-                )
-            }),
-            expr.clone()
-                .map_with(|ex, e| Statement::new(StatementKind::Expr(Box::new(ex)), e.span())),
-        ));
-
         let simple = {
             let atom = choice((
                 select! {
@@ -504,7 +484,7 @@ where
                 .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
                 .map_with(|fields, e| Expr::new(ExprKind::RecordLit(fields), e.span()));
 
-            let block = statement
+            let block = statement(expr.clone())
                 .then_ignore(just(TokenKind::Semicolon))
                 .repeated()
                 .collect::<Vec<_>>()
@@ -827,27 +807,32 @@ where
         })
 }
 
-fn let_declaration<'a, I>() -> impl Parser<'a, I, LetDeclaration, extra::Err<Rich<'a, TokenKind>>>
+fn statement<'a, I, P>(
+    expr_parser: P,
+) -> impl Parser<'a, I, Statement, extra::Err<Rich<'a, TokenKind>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
 {
-    let_binding(expr()).map_with(|(pattern, value, generics, annotation), e| LetDeclaration {
-        pattern,
-        value,
-        generics,
-        annotation,
-        span: e.span(),
-    })
+    choice((
+        let_binding(expr_parser.clone()).map_with(|(pat, val, generics, annot), e| {
+            Statement::new(
+                StatementKind::Let(pat, Box::new(val), generics, annot),
+                e.span(),
+            )
+        }),
+        expr_parser.map_with(|ex, e| Statement::new(StatementKind::Expr(Box::new(ex)), e.span())),
+    ))
 }
 
-fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
+pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     choice((
         type_alias().map(|t| Declaration::Type(t)),
         variant().map(|v| Declaration::Variant(v)),
-        let_declaration().map(|l| Declaration::Let(l)),
+        statement(expr()).map(|l| Declaration::Statement(l)),
     ))
 }
 
@@ -861,7 +846,7 @@ where
         .then_ignore(end())
 }
 
-fn make_input(
+pub fn make_input(
     eoi: SimpleSpan,
     tokens: &[Token],
 ) -> impl BorrowInput<'_, Token = TokenKind, Span = SimpleSpan> + Clone {

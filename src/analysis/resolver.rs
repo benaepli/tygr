@@ -1,7 +1,7 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, StatementKind,
-    TypeAlias, Variant,
+    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, Statement,
+    StatementKind, TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -519,9 +519,65 @@ impl Resolver {
         })
     }
 
-    pub fn resolve(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
+    pub fn resolve_expr(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
         let (resolved, _) = self.analyze(expr)?;
         Ok(resolved)
+    }
+
+    pub fn resolve_global_statement(
+        &mut self,
+        stmt: Statement,
+    ) -> Result<ResolvedStatement, ResolutionError> {
+        let span = stmt.span;
+        match stmt.kind {
+            StatementKind::Let(pattern, value, generics, annot) => {
+                let mut new_type_scope = HashMap::new();
+                let mut resolved_generics = Vec::new();
+                for generic in generics {
+                    let id = self.new_id();
+                    new_type_scope.insert(generic.name.clone(), id);
+                    resolved_generics.push(id);
+                }
+                self.type_scopes.push(new_type_scope);
+
+                let resolved_annot = if let Some(a) = annot {
+                    let a_span = a.span;
+                    Some(self.resolve_annotation(a)?.finalize(a_span)?)
+                } else {
+                    None
+                };
+
+                let (resolved_value, _free_in_value) = self.analyze(*value)?;
+
+                let scope_idx = self.scopes.len() - 1;
+
+                let mut pattern_scope = HashMap::new();
+                let resolved_pattern = self.analyze_pattern(pattern, &mut pattern_scope)?;
+
+                for (name, id) in pattern_scope {
+                    self.scopes[scope_idx].insert(name, id);
+                }
+
+                self.type_scopes.pop();
+
+                Ok(ResolvedStatement::new(
+                    ResolvedStatementKind::Let {
+                        pattern: resolved_pattern,
+                        value: Box::new(resolved_value),
+                        value_type: resolved_annot,
+                        type_params: resolved_generics,
+                    },
+                    span,
+                ))
+            }
+            StatementKind::Expr(expr) => {
+                let (resolved_expr, _free_in_expr) = self.analyze(*expr)?;
+                Ok(ResolvedStatement::new(
+                    ResolvedStatementKind::Expr(Box::new(resolved_expr)),
+                    span,
+                ))
+            }
+        }
     }
 
     fn analyze_pattern(
@@ -969,6 +1025,13 @@ impl Resolver {
                 ))
             }
         }
+    }
+
+    pub fn snapshot_name_table(&self) -> crate::analysis::name_table::NameTable {
+        crate::analysis::name_table::NameTable::with_maps(
+            self.name_origins.clone(),
+            self.type_name_origins.clone(),
+        )
     }
 
     /// Extract the NameTable from this resolver.

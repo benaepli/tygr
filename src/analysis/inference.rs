@@ -1,7 +1,8 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
     Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind, ResolvedMatchBranch,
-    ResolvedPattern, ResolvedPatternKind, ResolvedStatementKind, ResolvedVariant, TypeName,
+    ResolvedPattern, ResolvedPatternKind, ResolvedStatement, ResolvedStatementKind,
+    ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
@@ -208,7 +209,7 @@ pub struct TypedVariant {
     pub ty: Rc<Type>,
 }
 
-type Environment = HashMap<Name, TypeScheme>;
+pub type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
 type TypeContext = HashMap<TypeName, Rc<Type>>;
 
@@ -1240,6 +1241,64 @@ impl Inferrer {
                 Ok(Typed {
                     kind: TypedKind::Block(typed_statements, typed_tail),
                     ty: block_ty,
+                    span,
+                })
+            }
+        }
+    }
+
+    pub fn infer_global_statement(
+        &mut self,
+        env: &mut Environment,
+        stmt: ResolvedStatement,
+    ) -> Result<TypedStatement, TypeError> {
+        let span = stmt.span;
+        match stmt.kind {
+            ResolvedStatementKind::Let {
+                pattern,
+                value,
+                value_type,
+                type_params,
+            } => {
+                for param_id in type_params {
+                    let ty = Type::new(self.new_type(), self.new_kind());
+                    self.type_ctx.insert(param_id, ty);
+                }
+
+                let typed_value = self.infer_type(env, *value)?;
+
+                if let Some(annot) = value_type {
+                    let expected_ty = self.instantiate_annotation(&annot)?;
+                    self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+                }
+
+                let value_ty = self.apply_subst(&typed_value.ty);
+
+                let mut new_pattern_bindings = Environment::new();
+                let typed_pattern = self.infer_pattern(pattern, &mut new_pattern_bindings)?;
+
+                self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                for (name, scheme) in new_pattern_bindings {
+                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
+                    env.insert(name, s);
+                }
+
+                Ok(TypedStatement {
+                    kind: TypedStatementKind::Let {
+                        pattern: typed_pattern,
+                        value: Box::new(typed_value),
+                    },
+                    ty: value_ty,
+                    span,
+                })
+            }
+            ResolvedStatementKind::Expr(expr) => {
+                let typed_expr = self.infer_type(env, *expr)?;
+                let ty = typed_expr.ty.clone();
+                Ok(TypedStatement {
+                    kind: TypedStatementKind::Expr(Box::new(typed_expr)),
+                    ty,
                     span,
                 })
             }

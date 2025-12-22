@@ -3,22 +3,31 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use tygr::compiler::compile;
-use tygr::interpreter::{ValueDisplay, run};
+use tygr::interpreter::{eval_statement, ValueDisplay};
+use tygr::repl::Repl;
+use tygr::interpreter;
 
-/// A custom interpreter for a simple language
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// The path to the script file to run
-    #[arg(required = true)]
-    file_path: PathBuf,
+    /// The path to the script file to run. If omitted, starts a REPL.
+    #[arg(required = false)]
+    file_path: Option<PathBuf>,
 }
 
 fn main() {
     let cli = Cli::parse();
-    let filename_str = cli.file_path.display().to_string();
 
-    let input = match fs::read_to_string(&cli.file_path) {
+    match cli.file_path {
+        Some(path) => run_file(path),
+        None => Repl::new().run(),
+    }
+}
+
+fn run_file(path: PathBuf) {
+    let filename_str = path.display().to_string();
+
+    let input = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(e) => {
             eprintln!("Error reading file '{}': {}", filename_str, e);
@@ -34,14 +43,23 @@ fn main() {
         Ok(c) => c,
     };
 
-    match run(&typed) {
-        Ok(result) => println!(
+    let mut env = interpreter::Environment::new();
+    let mut last_result = None;
+
+    for stmt in typed {
+        match eval_statement(&mut env, &stmt) {
+            Ok(result) => last_result = Some(result),
+            Err(e) => {
+                eprintln!("Runtime error: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+
+    if let Some(result) = last_result {
+        println!(
             "Program result: {}",
             ValueDisplay::new(&result, &name_table)
-        ),
-        Err(e) => {
-            eprintln!("Runtime error: {}", e);
-            process::exit(1);
-        }
+        );
     }
 }
