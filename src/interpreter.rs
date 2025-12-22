@@ -1,8 +1,11 @@
-use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
+use crate::analysis::inference::{
+    Typed, TypedKind, TypedPattern, TypedPatternKind, TypedStatement, TypedStatementKind,
+};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -21,12 +24,6 @@ pub enum Value {
         param: TypedPattern,
         body: Box<Typed>,
         env: Environment,
-    },
-    /// A recursive function value created by a `Fix` expression. It captures the
-    /// generator expression `f` from `fix(f)`.
-    RecursiveClosure {
-        generator_expr: Box<Typed>,
-        captured_env: Environment,
     },
     /// A partially-applied built-in function, collecting arguments.
     PartialBuiltin {
@@ -51,7 +48,6 @@ impl fmt::Debug for Value {
             Value::List(v) => f.debug_list().entries(v.iter()).finish(),
             Value::Pair(a, b) => f.debug_tuple("Pair").field(a).field(b).finish(),
             Value::Closure { .. } => write!(f, "<closure>"),
-            Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { func, args } => f
                 .debug_struct("PartialBuiltin")
                 .field("func", func)
@@ -110,7 +106,6 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
                 ValueDisplay::new(b, self.name_table)
             ),
             Value::Closure { .. } => write!(f, "<closure>"),
-            Value::RecursiveClosure { .. } => write!(f, "<recursive_closure>"),
             Value::PartialBuiltin { .. } => write!(f, "<partial_builtin>"),
             Value::Builtin(_) => write!(f, "<builtin>"),
             Value::Record(fields) => {
@@ -170,9 +165,9 @@ impl fmt::Display for EvalError {
 pub type EvalResult = Result<Rc<Value>, EvalError>;
 
 /// The execution environment, mapping names to values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Environment {
-    bindings: HashMap<Name, Rc<Value>>,
+    bindings: HashMap<Name, Rc<RefCell<Rc<Value>>>>,
 }
 
 impl Environment {
@@ -183,11 +178,15 @@ impl Environment {
     }
 
     pub fn get(&self, name: &Name) -> Option<Rc<Value>> {
-        self.bindings.get(name).cloned()
+        self.bindings.get(name).map(|cell| cell.borrow().clone())
+    }
+
+    pub fn insert_cell(&mut self, name: Name, cell: Rc<RefCell<Rc<Value>>>) {
+        self.bindings.insert(name, cell);
     }
 
     pub fn insert(&mut self, name: Name, value: Rc<Value>) {
-        self.bindings.insert(name, value);
+        self.bindings.insert(name, Rc::new(RefCell::new(value)));
     }
 }
 
@@ -515,16 +514,6 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
             bind_pattern(param, arg, &mut new_env)?;
             eval(body, &mut new_env)
         }
-        Value::RecursiveClosure {
-            generator_expr,
-            captured_env,
-        } => {
-            // A recursive closure `fix(f)` applied to an argument `x`
-            // behaves like `(f (fix f)) x`.
-            let generator_val = eval(generator_expr, &mut captured_env.clone())?;
-            let actual_func = apply(generator_val, func.clone())?;
-            apply(actual_func, arg)
-        }
         Value::Builtin(b) => {
             let arity = builtin_arity(b);
             if arity == 1 {
@@ -552,8 +541,8 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
         }
         Value::Constructor(variant_id, ctor_id) => Ok(Rc::new(Value::Variant(
             arg,
-            variant_id.clone(),
-            ctor_id.clone(),
+            *variant_id,
+            *ctor_id,
         ))),
         _ => Err(EvalError::NotAFunction),
     }
@@ -563,7 +552,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
     match &expr.kind {
         TypedKind::Var(name) => env
             .get(name)
-            .ok_or_else(|| EvalError::UndefinedVariable(*name)),
+            .ok_or(EvalError::UndefinedVariable(*name)),
         TypedKind::IntLit(i) => Ok(Rc::new(Value::Int(*i))),
         TypedKind::FloatLit(f) => Ok(Rc::new(Value::Float(*f))),
         TypedKind::BoolLit(b) => Ok(Rc::new(Value::Bool(*b))),
@@ -608,7 +597,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 if result.is_err() {
                     continue;
                 }
-                return eval(&*branch.expr, &mut new_env);
+                return eval(&branch.expr, &mut new_env);
             }
             Err(EvalError::NonExhaustiveMatch)
         }
@@ -616,14 +605,6 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             let func_val = eval(func_expr, env)?;
             let arg_val = eval(arg_expr, env)?;
             apply(func_val, arg_val)
-        }
-        TypedKind::Fix(generator_expr) => {
-            // The value of `fix(f)` is a special `RecursiveClosure` value.
-            // It captures the expression `f` and the current environment.
-            Ok(Rc::new(Value::RecursiveClosure {
-                generator_expr: generator_expr.clone(),
-                captured_env: env.clone(),
-            }))
         }
         TypedKind::BinOp(op, lhs, rhs) => {
             let left = eval(lhs, env)?;
@@ -637,9 +618,10 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             let v2 = eval(e2, env)?;
             match &*v2 {
                 Value::List(list) => {
-                    let mut new_list = list.clone();
-                    new_list.push(v1);
-                    Ok(Rc::new(Value::List(new_list)))
+                    let mut combined = Vec::with_capacity(list.len() + 1);
+                    combined.push(v1);
+                    combined.extend_from_slice(list);
+                    Ok(Rc::new(Value::List(combined)))
                 }
                 _ => Err(EvalError::TypeMismatch(
                     "Cons second argument must be a list".into(),
@@ -672,12 +654,68 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         &TypedKind::Constructor(variant_id, ctor_id) => {
             Ok(Rc::new(Value::Constructor(variant_id, ctor_id)))
         }
+
+        TypedKind::RecRecord(fields) => {
+            let mut rec_env = env.clone();
+            for (_label, (name_id, _expr)) in fields.iter() {
+                let placeholder = Rc::new(RefCell::new(Rc::new(Value::Unit)));
+                rec_env.insert_cell(*name_id, placeholder.clone());
+            }
+
+            // Evaluate in the new environment where names point to placeholders.
+            let mut evaluated_results = Vec::new();
+            for (label, (name_id, expr)) in fields {
+                let val = eval(expr, &mut rec_env)?;
+                evaluated_results.push((label, name_id, val));
+            }
+
+            // Update the RefCells with the actual evaluated values.
+            let mut record_map = HashMap::new();
+            for (label, name_id, actual_val) in evaluated_results {
+                let placeholder_cell = rec_env.bindings.get(name_id).unwrap();
+                *placeholder_cell.borrow_mut() = actual_val.clone();
+
+                record_map.insert(label.clone(), (*actual_val).clone());
+            }
+
+            Ok(Rc::new(Value::Record(record_map)))
+        }
+        TypedKind::Block(statements, tail) => {
+            let mut block_env = env.clone();
+
+            for stmt in statements {
+                match &stmt.kind {
+                    TypedStatementKind::Let { pattern, value } => {
+                        let val = eval(value, &mut block_env)?;
+                        bind_pattern(pattern, val, &mut block_env)?;
+                    }
+                    TypedStatementKind::Expr(expr) => {
+                        eval(expr, &mut block_env)?;
+                    }
+                }
+            }
+
+            match tail {
+                Some(tail_expr) => eval(tail_expr, &mut block_env),
+                None => Ok(Rc::new(Value::Unit)),
+            }
+        }
     }
 }
 
-/// Main entry point for the interpreter.
 /// Creates an initial empty environment and starts evaluation.
-pub fn run(expr: &Typed) -> EvalResult {
+pub fn eval_expr(expr: &Typed) -> EvalResult {
     let mut initial_env = Environment::new();
     eval(expr, &mut initial_env)
+}
+
+pub fn eval_statement(env: &mut Environment, stmt: &TypedStatement) -> EvalResult {
+    match &stmt.kind {
+        TypedStatementKind::Let { pattern, value } => {
+            let val = eval(value, env)?;
+            bind_pattern(pattern, val.clone(), env)?;
+            Ok(val)
+        }
+        TypedStatementKind::Expr(expr) => eval(expr, env),
+    }
 }

@@ -36,6 +36,7 @@ pub enum TokenKind {
     LeftBrace,
     RightBrace,
     Comma,
+    Semicolon,
     Underscore,
     Colon,
     Dot,
@@ -89,7 +90,7 @@ pub enum TokenKind {
     Fn,
     Let,
     In,
-    Fix,
+    Rec,
     Match,
     With,
     Pipe,
@@ -107,6 +108,7 @@ impl fmt::Display for TokenKind {
             TokenKind::LeftBrace => write!(f, "{{"),
             TokenKind::RightBrace => write!(f, "}}"),
             TokenKind::Comma => write!(f, ","),
+            TokenKind::Semicolon => write!(f, ";"),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Dot => write!(f, "."),
@@ -156,7 +158,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Fn => write!(f, "fn"),
             TokenKind::Let => write!(f, "let"),
             TokenKind::In => write!(f, "in"),
-            TokenKind::Fix => write!(f, "fix"),
+            TokenKind::Rec => write!(f, "rec"),
             TokenKind::Match => write!(f, "match"),
             TokenKind::With => write!(f, "with"),
             TokenKind::Pipe => write!(f, "|"),
@@ -172,7 +174,7 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "else" => TokenKind::Else,
     "fn" => TokenKind::Fn,
     "let" => TokenKind::Let,
-    "fix" => TokenKind::Fix,
+    "rec" => TokenKind::Rec,
     "true" => TokenKind::Boolean(true),
     "false" => TokenKind::Boolean(false),
     "in" => TokenKind::In,
@@ -187,6 +189,7 @@ fn is_special_char(ch: char) -> bool {
         ch,
         '(' | ')'
             | ','
+            | ';'
             | '+'
             | '-'
             | '*'
@@ -371,7 +374,7 @@ impl<'a> Lexer<'a> {
         KEYWORDS
             .get(&result)
             .cloned()
-            .unwrap_or_else(|| TokenKind::Identifier(result))
+            .unwrap_or(TokenKind::Identifier(result))
     }
 }
 impl<'a> Iterator for Lexer<'a> {
@@ -393,6 +396,7 @@ impl<'a> Iterator for Lexer<'a> {
             '{' => Ok(TokenKind::LeftBrace),
             '}' => Ok(TokenKind::RightBrace),
             ',' => Ok(TokenKind::Comma),
+            ';' => Ok(TokenKind::Semicolon),
             '_' => Ok(TokenKind::Underscore),
 
             '+' => Ok(self.next_or('.', TokenKind::PlusDot, TokenKind::Plus)),

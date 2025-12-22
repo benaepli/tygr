@@ -4,23 +4,22 @@ enum Option[t] =
 
 enum Expr =
   | Val(int)
-  | Add(Expr * Expr)
-  | Div(Expr * Expr)
+  | Add((Expr, Expr))
+  | Div((Expr, Expr))
 
-let eval = fix (fn f => fn e =>
+let rec eval e =
   match e with
   | Val(n) => Some(n)
   | Add((l, r)) => (
-        match (f l, f r) with
+        match (eval l, eval r) with
         | (Some(lv), Some(rv)) => Some(lv + rv)
         | _ => None()
   )
   | Div((l, r)) => (
-        match (f l, f r) with
+        match (eval l, eval r) with
         | (Some(lv), Some(rv)) =>
             if rv == 0 then None() else Some(lv / rv)
         | _ => None()
   )
-)
 
 let result = eval (Add((Val(10), Val(20))))

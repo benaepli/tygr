@@ -1,9 +1,8 @@
-let fib = fix (fn self => fn n =>
+let fib = rec self => fn n =>
     if n <= 1 then
         n
     else
         self (n - 1) + self (n - 2)
-)
 
 let start_time = time_micro ()
 

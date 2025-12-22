@@ -6,19 +6,24 @@ We provide the full EBNF specification below.
 program ::= declaration+
 
 declaration ::= 
-      'let' pattern generics? annotation? '=' expr
-    | 'type' IDENTIFIER generics? '=' annotation
+      'let' 'rec'? pattern params? generics? annotation? '=' expr
+    | 'type' IDENTIFIER generics? '=' type
     | 'enum' IDENTIFIER generics? '=' '|'? constructor ( '|' constructor )*
 
-constructor ::= IDENTIFIER ( '(' annotation ')' )?
+constructor ::= IDENTIFIER ( '(' type ')' )?
 
 expr ::=
-      'let' pattern generics? annotation? '=' expr 'in' expr
+      'let' 'rec'? pattern params? generics? annotation? '=' expr 'in' expr
     | 'if' expr 'then' expr 'else' expr
-    | 'fn' pattern annotation? '=>' expr
+    | 'fn' param ( ',' param )* '=>' expr
     | 'match' expr 'with' match_branches
+    | 'rec' recursive_expr
     | or
-    
+
+recursive_expr ::=
+      IDENTIFIER ( ',' param )* '=>' expr
+    | '{' record_field ( ',' record_field )* '}'
+
 match_branches ::= ( '|' pattern '=>' expr )+
 
 or ::= or '||' and | and
@@ -27,7 +32,7 @@ and ::= and '&&' compare | compare
 
 compare ::= cons ( '==' | '!=' | '<' | '>' | '<=' | '>=' | '==.' | '!=.' | '<.' | '>.' | '<=.' | '>=.' | '==b' | '!=b' ) cons 
     | cons
-    
+
 cons ::= concat '::' cons | concat
 
 concat ::= concat '^' term | term
@@ -39,13 +44,12 @@ factor ::= factor ( '*' | '/' | '*.' | '/.' ) apply | apply
 
 apply ::=
       apply primary
-    | 'fix' unary
     | unary
 
 unary ::=
       ( '!' | '-' | '-.' ) unary
     | primary
-    
+
 primary ::= simple postfix*
 
 simple ::=
@@ -54,7 +58,13 @@ simple ::=
     | '(' ')'
     | '[]'
     | '(' expr ( ',' expr )* ')'
-    | '{' record_field ( ',' record_field )* '}'
+    | record
+    | block
+    
+block ::= '{' ( statement ';' )* expr? '}'
+record ::= 
+      '{' record_field ',' ( record_field ( ',' record_field )* )? '}' 
+    | '{' IDENTIFIER ':' expr ( ',' record_field )* '}'
     
 record_field ::= IDENTIFIER ( ':' expr )?
 
@@ -70,8 +80,12 @@ pattern ::=
     | '{' pattern_record_field ( ',' pattern_record_field )* '}'
 
 pattern_record_field ::= IDENTIFIER ( ':' pattern )?
-    
+
 generics ::= ( '[' IDENTIFIER ']' )+
+
+params ::= param ( ',' param )*
+
+param ::= pattern annotation?
 
 annotation ::= ':' type
 ```
@@ -81,22 +95,15 @@ annotation ::= ':' type
 ```ebnf
 type ::= type_arrow
 
-type_arrow ::= type_product '->' type_arrow 
-             | type_product
+type_arrow ::= type_apply '->' type_arrow 
+             | type_apply
 
-type_product ::= type_product '*' type_apply 
-               | type_apply
+type_apply ::= type_simple ( '[' type ']' )*
 
-type_apply ::= type_apply '[' type ']'
-             | type_atom
-
-type_atom ::= 'bool'
-            | 'int'
-            | 'float'
-            | 'unit'
-            | IDENTIFIER
-            | '(' type ')'
-            | '{' type_record_field ( ',' type_record_field )* '}'
+type_simple ::= 
+      IDENTIFIER
+    | '(' type ( ',' type )* ')'
+    | '{' type_record_field ( ',' type_record_field )* '}'
 
 type_record_field ::= IDENTIFIER ':' type
 ```

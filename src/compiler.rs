@@ -1,34 +1,29 @@
-use crate::analysis::desugar;
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
-use crate::analysis::inference::{Inferrer, Typed};
+use crate::analysis::inference::{Environment, Inferrer, TypedStatement};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
-use crate::parser::{
-    Declaration, Expr, ExprKind, LetDeclaration, Span, TypeAlias, Variant, parse_program,
-};
+use crate::parser::{Declaration, Statement, TypeAlias, Variant, parse_program};
 use crate::{lexer, parser};
 use anyhow::anyhow;
 
-fn split_declarations(
-    decls: Vec<Declaration>,
-) -> (Vec<LetDeclaration>, Vec<Variant>, Vec<TypeAlias>) {
-    let mut let_decls = Vec::new();
+fn split_declarations(decls: Vec<Declaration>) -> (Vec<Statement>, Vec<Variant>, Vec<TypeAlias>) {
+    let mut statements = Vec::new();
     let mut variants = Vec::new();
     let mut type_aliases = Vec::new();
 
     for decl in decls {
         match decl {
-            Declaration::Let(l) => let_decls.push(l),
+            Declaration::Statement(l) => statements.push(l),
             Declaration::Variant(v) => variants.push(v),
             Declaration::Type(t) => type_aliases.push(t),
         }
     }
 
-    (let_decls, variants, type_aliases)
+    (statements, variants, type_aliases)
 }
 
-pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Error> {
+pub fn compile(input: &str, name: &str) -> Result<(Vec<TypedStatement>, NameTable), anyhow::Error> {
     let mut lexer = Lexer::new(input);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(input, &errors, name)?;
@@ -45,15 +40,7 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
         Some(v) => v,
     };
 
-    let (declarations, variants, aliases) = split_declarations(output);
-    let desugared = desugar(declarations).unwrap_or_else(|| Expr {
-        kind: ExprKind::UnitLit,
-        span: Span {
-            context: (),
-            start: 0,
-            end: 0,
-        },
-    });
+    let (statements, variants, aliases) = split_declarations(output);
     let mut resolver = Resolver::new();
     for variant in &variants {
         if let Err(e) = resolver.declare_variant(variant) {
@@ -80,13 +67,16 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
             Ok(v) => resolved_variants.push(v),
         }
     }
-    let resolved = match resolver.resolve(desugared) {
-        Err(e) => {
-            report_resolution_errors(input, &[e], name)?;
-            return Err(anyhow!("resolution error"));
+    let mut resolved_statements = Vec::new();
+    for stmt in statements {
+        match resolver.resolve_global_statement(stmt) {
+            Err(e) => {
+                report_resolution_errors(input, &[e], name)?;
+                return Err(anyhow!("resolution error"));
+            }
+            Ok(r) => resolved_statements.push(r),
         }
-        Ok(r) => r,
-    };
+    }
 
     let name_table = resolver.into_name_table();
 
@@ -100,13 +90,17 @@ pub fn compile(input: &str, name: &str) -> Result<(Typed, NameTable), anyhow::Er
             Ok(t) => t,
         }
     }
-
-    let typed = match inferrer.infer(resolved) {
-        Err(e) => {
-            report_type_errors(input, &[e], name, &name_table)?;
-            return Err(anyhow!("type inference error"));
+    let mut env = Environment::new();
+    let mut typed_statements = Vec::new();
+    for stmt in resolved_statements {
+        match inferrer.infer_global_statement(&mut env, stmt) {
+            Err(e) => {
+                report_type_errors(input, &[e], name, &name_table)?;
+                return Err(anyhow!("type inference error"));
+            }
+            Ok(t) => typed_statements.push(t),
         }
-        Ok(t) => t,
-    };
-    Ok((typed, name_table))
+    }
+
+    Ok((typed_statements, name_table))
 }

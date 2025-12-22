@@ -3,10 +3,9 @@ pub mod inference;
 pub mod name_table;
 pub mod resolver;
 
-use crate::parser::{Expr, ExprKind, LetDeclaration, Pattern, PatternKind};
-use chumsky::span::Span;
+use crate::parser::{Expr, ExprKind, Pattern, PatternKind};
 
-fn pattern_to_expr(pattern: &Pattern) -> Expr {
+pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
     let kind = match &pattern.kind {
         PatternKind::Var(name) => ExprKind::Var(name.clone()),
         PatternKind::Unit => ExprKind::UnitLit,
@@ -38,38 +37,4 @@ fn pattern_to_expr(pattern: &Pattern) -> Expr {
         kind,
         span: pattern.span,
     }
-}
-
-pub fn desugar(mut declarations: Vec<LetDeclaration>) -> Option<Expr> {
-    let last = declarations.pop()?;
-    let last_span = last.pattern.span.union(last.value.span);
-
-    let final_expr = pattern_to_expr(&last.pattern);
-
-    let mut result = Expr {
-        kind: ExprKind::Let(
-            last.pattern,
-            Box::new(last.value),
-            Box::new(final_expr),
-            last.generics,
-            last.annotation,
-        ),
-        span: last_span,
-    };
-
-    for declaration in declarations.into_iter().rev() {
-        let decl_span = declaration.pattern.span.union(declaration.value.span);
-        result = Expr {
-            kind: ExprKind::Let(
-                declaration.pattern,
-                Box::new(declaration.value),
-                Box::new(result),
-                declaration.generics,
-                declaration.annotation,
-            ),
-            span: decl_span,
-        };
-    }
-
-    Some(result)
 }

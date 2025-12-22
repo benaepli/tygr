@@ -1,7 +1,8 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
     Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind, ResolvedMatchBranch,
-    ResolvedPattern, ResolvedPatternKind, ResolvedVariant, TypeName,
+    ResolvedPattern, ResolvedPatternKind, ResolvedStatement, ResolvedStatementKind,
+    ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
@@ -80,7 +81,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.ty.as_ref().ty {
             TypeKind::Var(id) => write!(f, "{}", id),
-            TypeKind::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(&id)),
+            TypeKind::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
             TypeKind::App(lhs, rhs) => {
                 let lhs_display = TypeDisplay::new(lhs.clone(), self.name_table);
                 let rhs_display = TypeDisplay::new(rhs.clone(), self.name_table);
@@ -144,6 +145,22 @@ pub struct TypedMatchPattern {
 }
 
 #[derive(Debug, Clone)]
+pub enum TypedStatementKind {
+    Let {
+        pattern: TypedPattern,
+        value: Box<Typed>,
+    },
+    Expr(Box<Typed>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedStatement {
+    pub kind: TypedStatementKind,
+    pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Typed {
     pub kind: TypedKind,
     pub ty: Rc<Type>,
@@ -164,9 +181,9 @@ pub enum TypedKind {
         value: Box<Typed>,
         body: Box<Typed>,
     },
-    Fix(Box<Typed>),
     If(Box<Typed>, Box<Typed>, Box<Typed>),
     Match(Box<Typed>, Vec<TypedMatchPattern>),
+    Block(Vec<TypedStatement>, Option<Box<Typed>>),
     Cons(Box<Typed>, Box<Typed>),
 
     UnitLit,
@@ -179,6 +196,7 @@ pub enum TypedKind {
     RecordLit(BTreeMap<String, Typed>),
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
+    RecRecord(BTreeMap<String, (Name, Typed)>),
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
@@ -191,7 +209,7 @@ pub struct TypedVariant {
     pub ty: Rc<Type>,
 }
 
-type Environment = HashMap<Name, TypeScheme>;
+pub type Environment = HashMap<Name, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
 type TypeContext = HashMap<TypeName, Rc<Type>>;
 
@@ -235,6 +253,12 @@ pub struct Inferrer {
     type_ctx: TypeContext,
 
     variants: HashMap<TypeName, TypedVariant>,
+}
+
+impl Default for Inferrer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Inferrer {
@@ -403,7 +427,7 @@ impl Inferrer {
             let kind = self.new_kind();
             let ty = Type::new(TypeKind::Var(id), kind);
             param_types.push(ty.clone());
-            self.type_ctx.insert(param_id.clone(), ty);
+            self.type_ctx.insert(param_id, ty);
             params.push(id);
         }
 
@@ -490,11 +514,10 @@ impl Inferrer {
         for (var, kind) in &scheme.vars {
             mapping.insert(*var, Type::new(self.new_type(), kind.clone()));
         }
-        self.instantiate_with_mapping(&scheme.ty, &mapping)
+        Self::instantiate_with_mapping(&scheme.ty, &mapping)
     }
 
     fn instantiate_with_mapping(
-        &self,
         ty: &Rc<Type>,
         mapping: &HashMap<TypeID, Rc<Type>>,
     ) -> Rc<Type> {
@@ -507,24 +530,24 @@ impl Inferrer {
                 }
             }
             TypeKind::Pair(a, b) => {
-                let new_a = self.instantiate_with_mapping(a, mapping);
-                let new_b = self.instantiate_with_mapping(b, mapping);
+                let new_a = Self::instantiate_with_mapping(a, mapping);
+                let new_b = Self::instantiate_with_mapping(b, mapping);
                 Type::new(TypeKind::Pair(new_a, new_b), ty.kind.clone())
             }
             TypeKind::Function(arg, ret) => {
-                let new_arg = self.instantiate_with_mapping(arg, mapping);
-                let new_ret = self.instantiate_with_mapping(ret, mapping);
+                let new_arg = Self::instantiate_with_mapping(arg, mapping);
+                let new_ret = Self::instantiate_with_mapping(ret, mapping);
                 Type::new(TypeKind::Function(new_arg, new_ret), ty.kind.clone())
             }
             TypeKind::App(lhs, rhs) => {
-                let new_lhs = self.instantiate_with_mapping(lhs, mapping);
-                let new_rhs = self.instantiate_with_mapping(rhs, mapping);
+                let new_lhs = Self::instantiate_with_mapping(lhs, mapping);
+                let new_rhs = Self::instantiate_with_mapping(rhs, mapping);
                 Type::new(TypeKind::App(new_lhs, new_rhs), ty.kind.clone())
             }
             TypeKind::Record(fields) => {
                 let mut new_fields = BTreeMap::new();
                 for (name, t) in fields {
-                    new_fields.insert(name.clone(), self.instantiate_with_mapping(t, mapping));
+                    new_fields.insert(name.clone(), Self::instantiate_with_mapping(t, mapping));
                 }
                 Type::new(TypeKind::Record(new_fields), ty.kind.clone())
             }
@@ -922,38 +945,6 @@ impl Inferrer {
                 })
             }
 
-            ResolvedKind::Fix(inner_expr) => {
-                let typed_expr = self.infer_type(env, *inner_expr)?;
-                let a = Type::new(self.new_type(), Rc::new(Kind::Star));
-
-                // Constraint 1: The expression must have type 'a -> 'a.
-                let expected_generator_ty = Type::new(
-                    TypeKind::Function(a.clone(), a.clone()),
-                    Rc::new(Kind::Star),
-                );
-                self.unify(&typed_expr.ty, &expected_generator_ty, span)?;
-
-                // Constraint 2: 'a' must itself be a function.
-                // This prevents using `fix` on simple values.
-                let function_shape = Rc::new(Type::new(
-                    TypeKind::Function(
-                        Type::new(self.new_type(), Rc::new(Kind::Star)),
-                        Type::new(self.new_type(), Rc::new(Kind::Star)),
-                    ),
-                    Rc::new(Kind::Star),
-                ));
-                self.unify(&a, &function_shape, span)?;
-
-                // The final type is 'a', which is now guaranteed to be a function.
-                let result_ty = self.apply_subst(&a);
-
-                Ok(Typed {
-                    kind: TypedKind::Fix(Box::new(typed_expr)),
-                    ty: result_ty,
-                    span,
-                })
-            }
-
             ResolvedKind::If(condition, consequent, alternative) => {
                 let typed_cond = self.infer_type(env, *condition)?;
                 self.unify(
@@ -1088,6 +1079,56 @@ impl Inferrer {
                 })
             }
 
+            ResolvedKind::RecRecord(fields) => {
+                let mut assumed_types = HashMap::new();
+                let mut extended_env = env.clone();
+                let mut field_names = BTreeMap::new();
+
+                for (field_label, (name_id, _)) in &fields {
+                    let arg_ty = self.new_type();
+                    let ret_ty = self.new_type();
+                    let func_ty = Type::new(
+                        TypeKind::Function(
+                            Type::new(arg_ty, Rc::new(Kind::Star)),
+                            Type::new(ret_ty, Rc::new(Kind::Star)),
+                        ),
+                        Rc::new(Kind::Star),
+                    );
+
+                    let scheme = TypeScheme {
+                        vars: vec![],
+                        ty: func_ty.clone(),
+                    };
+
+                    assumed_types.insert(*name_id, func_ty.clone());
+                    extended_env.insert(*name_id, scheme);
+                    field_names.insert(field_label.clone(), func_ty);
+                }
+
+                let mut typed_fields = BTreeMap::new();
+                for (field_label, (name_id, resolved_expr)) in fields {
+                    let typed_expr = self.infer_type(&extended_env, resolved_expr)?;
+
+                    let assumed_ty = assumed_types.get(&name_id).unwrap();
+                    self.unify(assumed_ty, &typed_expr.ty, typed_expr.span)?;
+
+                    typed_fields.insert(field_label, (name_id, typed_expr));
+                }
+
+                let mut final_field_types = BTreeMap::new();
+                for (label, assumed_ty) in field_names {
+                    let inferred_ty = self.apply_subst(&assumed_ty);
+                    final_field_types.insert(label, inferred_ty);
+                }
+                let record_ty = Type::new(TypeKind::Record(final_field_types), Rc::new(Kind::Star));
+
+                Ok(Typed {
+                    kind: TypedKind::RecRecord(typed_fields),
+                    ty: record_ty,
+                    span,
+                })
+            }
+
             ResolvedKind::FieldAccess(expr, field_name) => {
                 let typed_expr = self.infer_type(env, *expr)?;
                 let field_ty = Type::new(self.new_type(), Rc::new(Kind::Star));
@@ -1133,6 +1174,135 @@ impl Inferrer {
                 let ty = self.instantiate(&ctor);
                 Ok(Typed {
                     kind: TypedKind::Constructor(variant_id, ctor_id),
+                    ty,
+                    span,
+                })
+            }
+            ResolvedKind::Block(statements, tail) => {
+                let mut env = env.clone();
+                let mut typed_statements = Vec::new();
+
+                for stmt in statements {
+                    let stmt_span = stmt.span;
+                    match stmt.kind {
+                        ResolvedStatementKind::Let {
+                            pattern,
+                            value,
+                            value_type,
+                            type_params,
+                        } => {
+                            for param_id in type_params {
+                                let ty = Type::new(self.new_type(), self.new_kind());
+                                self.type_ctx.insert(param_id, ty);
+                            }
+
+                            let typed_value = self.infer_type(&env, *value)?;
+                            if let Some(annot) = value_type {
+                                let expected_ty = self.instantiate_annotation(&annot)?;
+                                self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+                            }
+
+                            let value_ty = self.apply_subst(&typed_value.ty);
+
+                            let mut new_env = Environment::new();
+                            let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
+
+                            self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                            for (name, scheme) in new_env {
+                                let s = self.generalize(&env, &self.apply_subst(&scheme.ty));
+                                env.insert(name, s);
+                            }
+
+                            typed_statements.push(TypedStatement {
+                                kind: TypedStatementKind::Let {
+                                    pattern: typed_pattern,
+                                    value: Box::new(typed_value),
+                                },
+                                ty: value_ty,
+                                span: stmt_span,
+                            });
+                        }
+                        ResolvedStatementKind::Expr(expr) => {
+                            let typed_expr = self.infer_type(&env, *expr)?;
+                            let ty = typed_expr.ty.clone();
+                            typed_statements.push(TypedStatement {
+                                kind: TypedStatementKind::Expr(Box::new(typed_expr)),
+                                ty,
+                                span: stmt_span,
+                            });
+                        }
+                    }
+                }
+
+                let (typed_tail, block_ty) = if let Some(tail_expr) = tail {
+                    let typed = self.infer_type(&env, *tail_expr)?;
+                    let ty = typed.ty.clone();
+                    (Some(Box::new(typed)), ty)
+                } else {
+                    (None, Type::simple(UNIT_TYPE))
+                };
+
+                Ok(Typed {
+                    kind: TypedKind::Block(typed_statements, typed_tail),
+                    ty: block_ty,
+                    span,
+                })
+            }
+        }
+    }
+
+    pub fn infer_global_statement(
+        &mut self,
+        env: &mut Environment,
+        stmt: ResolvedStatement,
+    ) -> Result<TypedStatement, TypeError> {
+        let span = stmt.span;
+        match stmt.kind {
+            ResolvedStatementKind::Let {
+                pattern,
+                value,
+                value_type,
+                type_params,
+            } => {
+                for param_id in type_params {
+                    let ty = Type::new(self.new_type(), self.new_kind());
+                    self.type_ctx.insert(param_id, ty);
+                }
+
+                let typed_value = self.infer_type(env, *value)?;
+
+                if let Some(annot) = value_type {
+                    let expected_ty = self.instantiate_annotation(&annot)?;
+                    self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+                }
+
+                let value_ty = self.apply_subst(&typed_value.ty);
+
+                let mut new_pattern_bindings = Environment::new();
+                let typed_pattern = self.infer_pattern(pattern, &mut new_pattern_bindings)?;
+
+                self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                for (name, scheme) in new_pattern_bindings {
+                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
+                    env.insert(name, s);
+                }
+
+                Ok(TypedStatement {
+                    kind: TypedStatementKind::Let {
+                        pattern: typed_pattern,
+                        value: Box::new(typed_value),
+                    },
+                    ty: value_ty,
+                    span,
+                })
+            }
+            ResolvedStatementKind::Expr(expr) => {
+                let typed_expr = self.infer_type(env, *expr)?;
+                let ty = typed_expr.ty.clone();
+                Ok(TypedStatement {
+                    kind: TypedStatementKind::Expr(Box::new(typed_expr)),
                     ty,
                     span,
                 })
