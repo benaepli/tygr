@@ -1,7 +1,7 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, Statement,
-    StatementKind, TypeAlias, Variant,
+    Annotation, AnnotationKind, BinOp, Definition, Expr, ExprKind, Pattern, PatternKind, Span,
+    Statement, StatementKind, TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -36,6 +36,15 @@ pub struct ResolvedVariant {
     pub name: TypeName,
     pub type_params: Vec<TypeName>,
     pub constructors: HashMap<Name, ResolvedConstructor>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedDefinition {
+    pub name: (Name, String),
+    pub expr: Box<Resolved>,
+    pub generics: Vec<TypeName>,
+    pub annotation: Option<ResolvedAnnotation>,
     pub span: Span,
 }
 
@@ -524,6 +533,57 @@ impl Resolver {
         })
     }
 
+    pub fn declare_definition(&mut self, def: &Definition) -> Result<(), ResolutionError> {
+        if self.scopes[0].contains_key(&def.name) {
+            return Err(ResolutionError::DuplicateBinding(
+                def.name.clone(),
+                def.span,
+            ));
+        }
+
+        let id = self.new_name();
+        self.name_origins.insert(id, def.name.clone());
+        self.scopes[0].insert(def.name.clone(), id);
+        Ok(())
+    }
+
+    pub fn resolve_definition(
+        &mut self,
+        def: Definition,
+    ) -> Result<ResolvedDefinition, ResolutionError> {
+        let name_id = *self.scopes[0]
+            .get(&def.name)
+            .expect("Definition name should have been declared");
+
+        let mut type_scope = HashMap::new();
+        let mut generic_ids = Vec::new();
+
+        for generic in def.generics {
+            let id = self.new_id();
+            self.type_name_origins.insert(id, generic.name.clone());
+            type_scope.insert(generic.name, id);
+            generic_ids.push(id);
+        }
+
+        self.type_scopes.push(type_scope);
+        let resolved_annot = if let Some(annot) = def.annotation {
+            let span = annot.span;
+            Some(self.resolve_annotation(annot)?.finalize(span)?)
+        } else {
+            None
+        };
+        let (resolved_expr, _free_vars) = self.analyze(def.expr)?;
+        self.type_scopes.pop();
+
+        Ok(ResolvedDefinition {
+            name: (name_id, def.name),
+            expr: Box::new(resolved_expr),
+            generics: generic_ids,
+            annotation: resolved_annot,
+            span: def.span,
+        })
+    }
+
     pub fn resolve_expr(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
         let (resolved, _) = self.analyze(expr)?;
         Ok(resolved)
@@ -551,20 +611,15 @@ impl Resolver {
                 } else {
                     None
                 };
-
                 let (resolved_value, _free_in_value) = self.analyze(*value)?;
-
                 let scope_idx = self.scopes.len() - 1;
-
                 let mut pattern_scope = HashMap::new();
                 let resolved_pattern = self.analyze_pattern(pattern, &mut pattern_scope)?;
 
                 for (name, id) in pattern_scope {
                     self.scopes[scope_idx].insert(name, id);
                 }
-
                 self.type_scopes.pop();
-
                 Ok(ResolvedStatement::new(
                     ResolvedStatementKind::Let {
                         pattern: resolved_pattern,

@@ -87,8 +87,24 @@ pub struct Variant {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Declaration {
+pub enum ReplStatement {
     Statement(Statement),
+    Variant(Variant),
+    Type(TypeAlias),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Definition {
+    pub name: String,
+    pub expr: Expr,
+    pub generics: Vec<Generic>,
+    pub annotation: Option<Annotation>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Declaration {
+    Def(Definition),
     Variant(Variant),
     Type(TypeAlias),
 }
@@ -161,6 +177,13 @@ pub enum ExprKind {
     FieldAccess(Box<Expr>, String),
 }
 
+fn ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    select! { TokenKind::Identifier(s) => s }
+}
+
 fn build_bin_op<'a, I, OP, P>(
     op_parser: OP,
     next_parser: P,
@@ -204,14 +227,14 @@ where
                 }
             });
 
-        let ident_pat = select! { TokenKind::Identifier(s) => s }
+        let ident_pat = ident()
             .then(tuple_pat.clone().or_not())
             .map_with(|(name, arg_opt), e| match arg_opt {
                 Some(arg) => Pattern::new(PatternKind::Constructor(name, Box::new(arg)), e.span()),
                 None => Pattern::new(PatternKind::Var(name), e.span()),
             });
 
-        let record_field = select! { TokenKind::Identifier(s) => s }
+        let record_field = ident()
             .then(just(TokenKind::Colon).ignore_then(pat.clone()).or_not())
             .map_with(|(name, pat_opt), e| match pat_opt {
                 Some(p) => (name, p),
@@ -264,9 +287,7 @@ where
             }
             .map_with(|kind, e| Annotation::new(kind, e.span()));
 
-            let ident = select! { TokenKind::Identifier(s) => s.clone() };
-
-            let field = ident
+            let field = ident()
                 .then_ignore(just(TokenKind::Colon))
                 .then(annot.clone())
                 .map(|(name, typ)| (name, typ));
@@ -336,9 +357,7 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     just(TokenKind::LeftBracket)
-        .ignore_then(select! {
-            TokenKind::Identifier(s) => s
-        })
+        .ignore_then(ident())
         .then_ignore(just(TokenKind::RightBracket))
         .map_with(|s, extra| Generic {
             name: s,
@@ -428,9 +447,7 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     recursive(|expr| {
-        let ident = select! { TokenKind::Identifier(s) => s.clone() };
-
-        let field = ident
+        let field = ident()
             .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
             .map_with(|(name, value_opt), e| match value_opt {
                 Some(value) => (name, value),
@@ -500,7 +517,7 @@ where
         }
 
         let postfix_op = just(TokenKind::Dot)
-            .ignore_then(ident.clone())
+            .ignore_then(ident())
             .map_with(|name, e| PostfixOp::FieldAccess(name, e.span()));
 
         let postfix = simple.foldl(postfix_op.repeated(), |lhs, op| match op {
@@ -687,7 +704,7 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
                 .map_with(|fields, e| Expr::new(ExprKind::RecRecord(fields), e.span())),
-            ident
+            ident()
                 .then(
                     just(TokenKind::Comma)
                         .ignore_then(
@@ -750,7 +767,7 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     just(TokenKind::Type)
-        .ignore_then(select! { TokenKind::Identifier(s) => s })
+        .ignore_then(ident())
         .then(generics())
         .then_ignore(just(TokenKind::Equal))
         .then(annotation())
@@ -766,7 +783,7 @@ fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
-    let constructor = select! { TokenKind::Identifier(s) => s }
+    let constructor = ident()
         .then(
             annotation()
                 .delimited_by(just(TokenKind::LeftParen), just(TokenKind::RightParen))
@@ -786,7 +803,7 @@ where
         });
 
     just(TokenKind::Enum)
-        .ignore_then(select! { TokenKind::Identifier(s) => s })
+        .ignore_then(ident())
         .then(generics())
         .then_ignore(just(TokenKind::Equal))
         .then_ignore(just(TokenKind::Pipe).or_not())
@@ -824,6 +841,68 @@ where
     ))
 }
 
+fn def<'a, I, P>(
+    expr_parser: P,
+) -> impl Parser<'a, I, Definition, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+{
+    just(TokenKind::Def)
+        .ignore_then(ident())
+        .then(
+            param()
+                .then(
+                    just(TokenKind::Comma)
+                        .ignore_then(param())
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .map(|(first, mut rest)| {
+                    let mut args = vec![first];
+                    args.append(&mut rest);
+                    args
+                })
+                .or_not(),
+        )
+        .then(generics())
+        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
+        .then_ignore(just(TokenKind::Equal))
+        .then(expr_parser)
+        .map_with(|((((name, params_opt), generics), annot), val), e| {
+            let span = e.span();
+            let value_expr = if let Some(params) = params_opt {
+                let mut iter = params.into_iter().rev();
+                let (last_pat, last_annot) = iter.next().unwrap();
+                let inner = Expr::new(ExprKind::Lambda(last_pat, Box::new(val), last_annot), span);
+                iter.fold(inner, |acc, (p, a)| {
+                    Expr::new(ExprKind::Lambda(p, Box::new(acc), a), span)
+                })
+            } else {
+                val
+            };
+
+            Definition {
+                name,
+                expr: value_expr,
+                generics,
+                annotation: annot,
+                span,
+            }
+        })
+}
+
+pub fn repl<'a, I>() -> impl Parser<'a, I, ReplStatement, extra::Err<Rich<'a, TokenKind>>>
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    choice((
+        type_alias().map(ReplStatement::Type),
+        variant().map(ReplStatement::Variant),
+        statement(expr()).map(ReplStatement::Statement),
+    ))
+}
+
 pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
@@ -831,8 +910,15 @@ where
     choice((
         type_alias().map(Declaration::Type),
         variant().map(Declaration::Variant),
-        statement(expr()).map(Declaration::Statement),
+        def(expr()).map(Declaration::Def),
     ))
+}
+
+pub fn script<'a, I>() -> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind>>>
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    repl().repeated().collect::<Vec<_>>().then_ignore(end())
 }
 
 pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>
@@ -850,6 +936,13 @@ pub fn make_input(
     tokens: &[Token],
 ) -> impl BorrowInput<'_, Token = TokenKind, Span = SimpleSpan> + Clone {
     tokens.map(eoi, |t| (&t.kind, &t.span))
+}
+
+pub fn parse_script(tokens: &'_ [Token]) -> ParseResult<Vec<ReplStatement>, Rich<'_, TokenKind>> {
+    let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
+    let input = make_input((0..len).into(), tokens);
+
+    script().parse(input)
 }
 
 pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind>> {

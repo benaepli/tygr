@@ -1,5 +1,6 @@
 use crate::analysis::inference::{
-    Typed, TypedKind, TypedPattern, TypedPatternKind, TypedStatement, TypedStatementKind,
+    Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind, TypedStatement,
+    TypedStatementKind,
 };
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
@@ -539,20 +540,16 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
                 }))
             }
         }
-        Value::Constructor(variant_id, ctor_id) => Ok(Rc::new(Value::Variant(
-            arg,
-            *variant_id,
-            *ctor_id,
-        ))),
+        Value::Constructor(variant_id, ctor_id) => {
+            Ok(Rc::new(Value::Variant(arg, *variant_id, *ctor_id)))
+        }
         _ => Err(EvalError::NotAFunction),
     }
 }
 
 fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
     match &expr.kind {
-        TypedKind::Var(name) => env
-            .get(name)
-            .ok_or(EvalError::UndefinedVariable(*name)),
+        TypedKind::Var(name) => env.get(name).ok_or(EvalError::UndefinedVariable(*name)),
         TypedKind::IntLit(i) => Ok(Rc::new(Value::Int(*i))),
         TypedKind::FloatLit(f) => Ok(Rc::new(Value::Float(*f))),
         TypedKind::BoolLit(b) => Ok(Rc::new(Value::Bool(*b))),
@@ -718,4 +715,38 @@ pub fn eval_statement(env: &mut Environment, stmt: &TypedStatement) -> EvalResul
         }
         TypedStatementKind::Expr(expr) => eval(expr, env),
     }
+}
+
+pub fn eval_groups(env: &mut Environment, groups: Vec<TypedGroup>) -> Result<(), EvalError> {
+    for group in groups {
+        match group {
+            TypedGroup::NonRecursive(def) => {
+                let val = eval(&def.expr, env)?;
+                env.insert(def.name.0, val);
+            }
+            TypedGroup::Recursive(defs) => {
+                let mut cells = HashMap::new();
+                for def in &defs {
+                    let cell = Rc::new(RefCell::new(Rc::new(Value::Unit)));
+                    env.insert_cell(def.name.0, cell.clone());
+                    cells.insert(def.name.0, cell);
+                }
+
+                for def in defs {
+                    let val = eval(&def.expr, env)?;
+                    let cell = cells.get(&def.name.0).unwrap();
+                    *cell.borrow_mut() = val;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn run_main(env: &Environment, main_name: Name) -> EvalResult {
+    let main_val = env
+        .get(&main_name)
+        .ok_or(EvalError::UndefinedVariable(main_name))?;
+
+    apply(main_val, Rc::new(Value::Unit))
 }

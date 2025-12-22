@@ -1,8 +1,9 @@
+use crate::analysis::dependencies::is_self_recursive;
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
-    Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind, ResolvedMatchBranch,
-    ResolvedPattern, ResolvedPatternKind, ResolvedStatement, ResolvedStatementKind,
-    ResolvedVariant, TypeName,
+    Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedDefinition, ResolvedKind,
+    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, ResolvedStatement,
+    ResolvedStatementKind, ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
@@ -139,6 +140,20 @@ pub enum TypedPatternKind {
 #[derive(Debug, Clone)]
 pub struct TypedMatchPattern {
     pub pattern: TypedPattern,
+    pub expr: Box<Typed>,
+    pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedGroup {
+    NonRecursive(TypedDefinition),
+    Recursive(Vec<TypedDefinition>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedDefinition {
+    pub name: (Name, String),
     pub expr: Box<Typed>,
     pub ty: Rc<Type>,
     pub span: Span,
@@ -517,10 +532,7 @@ impl Inferrer {
         Self::instantiate_with_mapping(&scheme.ty, &mapping)
     }
 
-    fn instantiate_with_mapping(
-        ty: &Rc<Type>,
-        mapping: &HashMap<TypeID, Rc<Type>>,
-    ) -> Rc<Type> {
+    fn instantiate_with_mapping(ty: &Rc<Type>, mapping: &HashMap<TypeID, Rc<Type>>) -> Rc<Type> {
         match &ty.ty {
             TypeKind::Var(id) => {
                 if let Some(new_ty) = mapping.get(id) {
@@ -1308,5 +1320,116 @@ impl Inferrer {
                 })
             }
         }
+    }
+
+    pub fn infer_definitions(
+        &mut self,
+        groups: Vec<Vec<ResolvedDefinition>>,
+        mut env: Environment,
+    ) -> Result<(Vec<TypedGroup>, Environment), TypeError> {
+        let mut typed_groups = Vec::new();
+
+        for group in groups {
+            let is_recursive = if group.len() > 1 {
+                true
+            } else {
+                let def = &group[0];
+                is_self_recursive(def)
+            };
+
+            if is_recursive {
+                let typed_defs = self.infer_recursive_group(group, &mut env)?;
+                typed_groups.push(TypedGroup::Recursive(typed_defs));
+            } else {
+                let def = group.into_iter().next().unwrap();
+                let typed_def = self.infer_non_recursive(def, &mut env)?;
+                typed_groups.push(TypedGroup::NonRecursive(typed_def));
+            }
+        }
+
+        Ok((typed_groups, env))
+    }
+
+    fn infer_non_recursive(
+        &mut self,
+        def: ResolvedDefinition,
+        env: &mut Environment,
+    ) -> Result<TypedDefinition, TypeError> {
+        let typed_expr = self.infer_type(env, *def.expr)?;
+        if let Some(annot) = &def.annotation {
+            let expected = self.instantiate_annotation(annot)?;
+            self.unify(&typed_expr.ty, &expected, def.span)?;
+        }
+        let final_ty = self.apply_subst(&typed_expr.ty);
+        let scheme = self.generalize(env, &final_ty);
+        env.insert(def.name.0, scheme);
+
+        Ok(TypedDefinition {
+            name: def.name,
+            expr: Box::new(typed_expr),
+            ty: final_ty,
+            span: def.span,
+        })
+    }
+
+    fn infer_recursive_group(
+        &mut self,
+        group: Vec<ResolvedDefinition>,
+        env: &mut Environment,
+    ) -> Result<Vec<TypedDefinition>, TypeError> {
+        let mut rec_env = env.clone();
+        let mut temp_types = HashMap::new();
+
+        for def in &group {
+            let arg_ty_id = self.new_type();
+            let ret_ty_id = self.new_type();
+
+            let arg_ty = Type::new(arg_ty_id, Rc::new(Kind::Star));
+            let ret_ty = Type::new(ret_ty_id, Rc::new(Kind::Star));
+
+            let func_ty = Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star));
+            rec_env.insert(
+                def.name.0,
+                TypeScheme {
+                    vars: vec![],
+                    ty: func_ty.clone(),
+                },
+            );
+            temp_types.insert(def.name.0, func_ty);
+        }
+
+        let mut typed_defs = Vec::new();
+
+        for def in group {
+            let name = def.name;
+            let span = def.span;
+
+            let typed_expr = self.infer_type(&rec_env, *def.expr)?;
+            let placeholder_ty = temp_types.get(&name.0).unwrap();
+
+            if let Some(annot) = &def.annotation {
+                let expected = self.instantiate_annotation(annot)?;
+                self.unify(&typed_expr.ty, &expected, span)?;
+                self.unify(placeholder_ty, &expected, span)?;
+            }
+
+            self.unify(placeholder_ty, &typed_expr.ty, span)?;
+
+            typed_defs.push(TypedDefinition {
+                name,
+                expr: Box::new(typed_expr),
+                ty: placeholder_ty.clone(),
+                span,
+            });
+        }
+
+        for typed_def in &mut typed_defs {
+            let final_ty = self.apply_subst(&typed_def.ty);
+            typed_def.ty = final_ty.clone();
+            let scheme = self.generalize(env, &final_ty);
+            env.insert(typed_def.name.0, scheme);
+        }
+
+        Ok(typed_defs)
     }
 }

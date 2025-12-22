@@ -4,7 +4,7 @@ use crate::analysis::inference::Inferrer;
 use crate::analysis::resolver::Resolver;
 use crate::interpreter::{ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
-use crate::parser::{Declaration, make_input};
+use crate::parser::{ReplStatement, make_input};
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
 use colored::*;
@@ -68,30 +68,26 @@ impl Repl {
         }
 
         let input = make_input((0..source.len()).into(), &tokens);
-        let Ok(decl) = parser::declaration()
-            .parse(input)
-            .into_result()
-            .map_err(|e| {
-                let _ = parser::format::report_errors(source, e.iter(), name);
-            })
-        else {
+        let Ok(decl) = parser::repl().parse(input).into_result().map_err(|e| {
+            let _ = parser::format::report_errors(source, e.iter(), name);
+        }) else {
             return;
         };
 
         self.execute_declaration(source, name, decl);
     }
 
-    fn execute_declaration(&mut self, source: &str, name: &str, decl: Declaration) {
+    fn execute_declaration(&mut self, source: &str, name: &str, decl: ReplStatement) {
         let name_table = self.resolver.snapshot_name_table();
 
         match decl {
-            Declaration::Type(t) => {
+            ReplStatement::Type(t) => {
                 if let Err(e) = self.resolver.resolve_type_alias(t) {
                     let _ = report_resolution_errors(source, &[e], name);
                 }
             }
 
-            Declaration::Variant(v) => {
+            ReplStatement::Variant(v) => {
                 let res = self
                     .resolver
                     .declare_variant(&v)
@@ -109,7 +105,7 @@ impl Repl {
                 }
             }
 
-            Declaration::Statement(stmt) => self.execute_statement(source, name, stmt),
+            ReplStatement::Statement(stmt) => self.execute_statement(source, name, stmt),
         }
     }
 

@@ -96,6 +96,7 @@ pub enum TokenKind {
     Pipe,
     Type,
     Enum,
+    Def,
 }
 
 impl fmt::Display for TokenKind {
@@ -164,6 +165,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Pipe => write!(f, "|"),
             TokenKind::Type => write!(f, "type"),
             TokenKind::Enum => write!(f, "enum"),
+            TokenKind::Def => write!(f, "def"),
         }
     }
 }
@@ -182,6 +184,7 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "with" => TokenKind::With,
     "type" => TokenKind::Type,
     "enum" => TokenKind::Enum,
+    "def" => TokenKind::Def,
 };
 
 fn is_special_char(ch: char) -> bool {
