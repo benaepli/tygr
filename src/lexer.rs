@@ -36,6 +36,7 @@ pub enum TokenKind {
     LeftBrace,
     RightBrace,
     Comma,
+    Semicolon,
     Underscore,
     Colon,
     Dot,
@@ -107,6 +108,7 @@ impl fmt::Display for TokenKind {
             TokenKind::LeftBrace => write!(f, "{{"),
             TokenKind::RightBrace => write!(f, "}}"),
             TokenKind::Comma => write!(f, ","),
+            TokenKind::Semicolon => write!(f, ";"),
             TokenKind::Underscore => write!(f, "_"),
             TokenKind::Colon => write!(f, ":"),
             TokenKind::Dot => write!(f, "."),
@@ -187,6 +189,7 @@ fn is_special_char(ch: char) -> bool {
         ch,
         '(' | ')'
             | ','
+            | ';'
             | '+'
             | '-'
             | '*'
@@ -393,6 +396,7 @@ impl<'a> Iterator for Lexer<'a> {
             '{' => Ok(TokenKind::LeftBrace),
             '}' => Ok(TokenKind::RightBrace),
             ',' => Ok(TokenKind::Comma),
+            ';' => Ok(TokenKind::Semicolon),
             '_' => Ok(TokenKind::Underscore),
 
             '+' => Ok(self.next_or('.', TokenKind::PlusDot, TokenKind::Plus)),

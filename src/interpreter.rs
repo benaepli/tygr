@@ -1,4 +1,4 @@
-use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind};
+use crate::analysis::inference::{Typed, TypedKind, TypedPattern, TypedPatternKind, TypedStatementKind};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
@@ -680,6 +680,26 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             }
 
             Ok(Rc::new(Value::Record(record_map)))
+        }
+        TypedKind::Block(statements, tail) => {
+            let mut block_env = env.clone();
+
+            for stmt in statements {
+                match &stmt.kind {
+                    TypedStatementKind::Let { pattern, value } => {
+                        let val = eval(value, &mut block_env)?;
+                        bind_pattern(pattern, val, &mut block_env)?;
+                    }
+                    TypedStatementKind::Expr(expr) => {
+                        eval(expr, &mut block_env)?;
+                    }
+                }
+            }
+
+            match tail {
+                Some(tail_expr) => eval(tail_expr, &mut block_env),
+                None => Ok(Rc::new(Value::Unit)),
+            }
         }
     }
 }

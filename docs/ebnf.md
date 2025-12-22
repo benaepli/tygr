@@ -58,7 +58,13 @@ simple ::=
     | '(' ')'
     | '[]'
     | '(' expr ( ',' expr )* ')'
-    | '{' record_field ( ',' record_field )* '}'
+    | record
+    | block
+    
+block ::= '{' ( statement ';' )* expr? '}'
+record ::= 
+      '{' record_field ',' ( record_field ( ',' record_field )* )? '}' 
+    | '{' IDENTIFIER ':' expr ( ',' record_field )* '}'
     
 record_field ::= IDENTIFIER ( ':' expr )?
 

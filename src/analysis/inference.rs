@@ -1,7 +1,7 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
     Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedKind, ResolvedMatchBranch,
-    ResolvedPattern, ResolvedPatternKind, ResolvedVariant, TypeName,
+    ResolvedPattern, ResolvedPatternKind, ResolvedStatementKind, ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
@@ -144,6 +144,22 @@ pub struct TypedMatchPattern {
 }
 
 #[derive(Debug, Clone)]
+pub enum TypedStatementKind {
+    Let {
+        pattern: TypedPattern,
+        value: Box<Typed>,
+    },
+    Expr(Box<Typed>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedStatement {
+    pub kind: TypedStatementKind,
+    pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Typed {
     pub kind: TypedKind,
     pub ty: Rc<Type>,
@@ -166,6 +182,7 @@ pub enum TypedKind {
     },
     If(Box<Typed>, Box<Typed>, Box<Typed>),
     Match(Box<Typed>, Vec<TypedMatchPattern>),
+    Block(Vec<TypedStatement>, Option<Box<Typed>>),
     Cons(Box<Typed>, Box<Typed>),
 
     UnitLit,
@@ -1152,6 +1169,77 @@ impl Inferrer {
                 Ok(Typed {
                     kind: TypedKind::Constructor(variant_id, ctor_id),
                     ty,
+                    span,
+                })
+            }
+            ResolvedKind::Block(statements, tail) => {
+                let mut env = env.clone();
+                let mut typed_statements = Vec::new();
+
+                for stmt in statements {
+                    let stmt_span = stmt.span;
+                    match stmt.kind {
+                        ResolvedStatementKind::Let {
+                            pattern,
+                            value,
+                            value_type,
+                            type_params,
+                        } => {
+                            for param_id in type_params {
+                                let ty = Type::new(self.new_type(), self.new_kind());
+                                self.type_ctx.insert(param_id, ty);
+                            }
+
+                            let typed_value = self.infer_type(&env, *value)?;
+                            if let Some(annot) = value_type {
+                                let expected_ty = self.instantiate_annotation(&annot)?;
+                                self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+                            }
+
+                            let value_ty = self.apply_subst(&typed_value.ty);
+
+                            let mut new_env = Environment::new();
+                            let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
+
+                            self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                            for (name, scheme) in new_env {
+                                let s = self.generalize(&env, &self.apply_subst(&scheme.ty));
+                                env.insert(name, s);
+                            }
+
+                            typed_statements.push(TypedStatement {
+                                kind: TypedStatementKind::Let {
+                                    pattern: typed_pattern,
+                                    value: Box::new(typed_value),
+                                },
+                                ty: value_ty,
+                                span: stmt_span,
+                            });
+                        }
+                        ResolvedStatementKind::Expr(expr) => {
+                            let typed_expr = self.infer_type(&env, *expr)?;
+                            let ty = typed_expr.ty.clone();
+                            typed_statements.push(TypedStatement {
+                                kind: TypedStatementKind::Expr(Box::new(typed_expr)),
+                                ty,
+                                span: stmt_span,
+                            });
+                        }
+                    }
+                }
+
+                let (typed_tail, block_ty) = if let Some(tail_expr) = tail {
+                    let typed = self.infer_type(&env, *tail_expr)?;
+                    let ty = typed.ty.clone();
+                    (Some(Box::new(typed)), ty)
+                } else {
+                    (None, Type::simple(UNIT_TYPE))
+                };
+
+                Ok(Typed {
+                    kind: TypedKind::Block(typed_statements, typed_tail),
+                    ty: block_ty,
                     span,
                 })
             }

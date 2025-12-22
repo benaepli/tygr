@@ -1,7 +1,7 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, TypeAlias,
-    Variant,
+    Annotation, AnnotationKind, BinOp, Expr, ExprKind, Pattern, PatternKind, Span, StatementKind,
+    TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -104,6 +104,29 @@ impl ResolvedAnnotation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedStatementKind {
+    Let {
+        pattern: ResolvedPattern,
+        value: Box<Resolved>,
+        value_type: Option<ResolvedAnnotation>,
+        type_params: Vec<TypeName>,
+    },
+    Expr(Box<Resolved>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedStatement {
+    pub kind: ResolvedStatementKind,
+    pub span: Span,
+}
+
+impl ResolvedStatement {
+    fn new(kind: ResolvedStatementKind, span: Span) -> Self {
+        ResolvedStatement { kind, span }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedKind {
     Var(Name),
     Lambda {
@@ -122,6 +145,7 @@ pub enum ResolvedKind {
     },
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
     Match(Box<Resolved>, Vec<ResolvedMatchBranch>),
+    Block(Vec<ResolvedStatement>, Option<Box<Resolved>>),
     Cons(Box<Resolved>, Box<Resolved>),
 
     UnitLit,
@@ -859,6 +883,89 @@ impl Resolver {
                 Ok((
                     Resolved::new(ResolvedKind::FieldAccess(Box::new(resolved), field), span),
                     free,
+                ))
+            }
+            ExprKind::Block(statements, tail) => {
+                let mut all_free = HashSet::new();
+                let mut resolved_statements = Vec::new();
+                let block_scope = HashMap::new();
+
+                self.scopes.push(block_scope.clone());
+
+                for stmt in statements {
+                    let stmt_span = stmt.span;
+                    match stmt.kind {
+                        StatementKind::Let(pattern, value, generics, annot) => {
+                            let mut new_type_scope = HashMap::new();
+                            let mut resolved_generics = Vec::new();
+                            for generic in generics {
+                                let id = self.new_id();
+                                new_type_scope.insert(generic.name.clone(), id);
+                                resolved_generics.push(id);
+                            }
+                            self.type_scopes.push(new_type_scope);
+
+                            let resolved_annot = if let Some(a) = annot {
+                                let a_span = a.span;
+                                Some(self.resolve_annotation(a)?.finalize(a_span)?)
+                            } else {
+                                None
+                            };
+
+                            let (resolved_value, free_in_value) = self.analyze(*value)?;
+                            all_free.extend(free_in_value);
+
+                            let mut pattern_scope = HashMap::new();
+                            let resolved_pattern =
+                                self.analyze_pattern(pattern, &mut pattern_scope)?;
+
+                            let current_scope = self.scopes.last_mut().unwrap();
+                            for (name, id) in pattern_scope {
+                                current_scope.insert(name, id);
+                            }
+
+                            self.type_scopes.pop();
+
+                            resolved_statements.push(ResolvedStatement::new(
+                                ResolvedStatementKind::Let {
+                                    pattern: resolved_pattern,
+                                    value: Box::new(resolved_value),
+                                    value_type: resolved_annot,
+                                    type_params: resolved_generics,
+                                },
+                                stmt_span,
+                            ));
+                        }
+                        StatementKind::Expr(expr) => {
+                            let (resolved_expr, free_in_expr) = self.analyze(*expr)?;
+                            all_free.extend(free_in_expr);
+                            resolved_statements.push(ResolvedStatement::new(
+                                ResolvedStatementKind::Expr(Box::new(resolved_expr)),
+                                stmt_span,
+                            ));
+                        }
+                    }
+                }
+
+                let resolved_tail = if let Some(tail_expr) = tail {
+                    let (resolved, free) = self.analyze(*tail_expr)?;
+                    all_free.extend(free);
+                    Some(Box::new(resolved))
+                } else {
+                    None
+                };
+
+                let block_scope = self.scopes.pop().unwrap();
+                for name_id in block_scope.values() {
+                    all_free.remove(name_id);
+                }
+
+                Ok((
+                    Resolved::new(
+                        ResolvedKind::Block(resolved_statements, resolved_tail),
+                        span,
+                    ),
+                    all_free,
                 ))
             }
         }

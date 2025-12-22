@@ -110,6 +110,24 @@ pub struct MatchBranch {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum StatementKind {
+    Let(Pattern, Box<Expr>, Vec<Generic>, Option<Annotation>),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+
+impl Statement {
+    fn new(kind: StatementKind, span: Span) -> Self {
+        Statement { kind, span }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
@@ -135,6 +153,7 @@ pub enum ExprKind {
     ),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<MatchBranch>),
+    Block(Vec<Statement>, Option<Box<Expr>>),
 
     UnitLit,
     PairLit(Box<Expr>, Box<Expr>),
@@ -429,6 +448,17 @@ where
                 None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
             });
 
+        let statement = choice((
+            let_binding(expr.clone()).map_with(|(pat, val, generics, annot), e| {
+                Statement::new(
+                    StatementKind::Let(pat, Box::new(val), generics, annot),
+                    e.span(),
+                )
+            }),
+            expr.clone()
+                .map_with(|ex, e| Statement::new(StatementKind::Expr(Box::new(ex)), e.span())),
+        ));
+
         let simple = {
             let atom = choice((
                 select! {
@@ -474,7 +504,16 @@ where
                 .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
                 .map_with(|fields, e| Expr::new(ExprKind::RecordLit(fields), e.span()));
 
-            choice((record_lit, paren_expr, atom))
+            let block = statement
+                .then_ignore(just(TokenKind::Semicolon))
+                .repeated()
+                .collect::<Vec<_>>()
+                .then(expr.clone().or_not())
+                .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                .map_with(|(stmts, end_expr), e| {
+                    Expr::new(ExprKind::Block(stmts, end_expr.map(Box::new)), e.span())
+                });
+            choice((block, record_lit, paren_expr, atom))
         };
 
         #[derive(Clone)]
