@@ -4,9 +4,8 @@ pub mod name_table;
 pub mod resolver;
 
 use crate::parser::{Expr, ExprKind, Pattern, PatternKind};
-use chumsky::span::Span;
 
-fn pattern_to_expr(pattern: &Pattern) -> Expr {
+pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
     let kind = match &pattern.kind {
         PatternKind::Var(name) => ExprKind::Var(name.clone()),
         PatternKind::Unit => ExprKind::UnitLit,

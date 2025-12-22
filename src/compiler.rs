@@ -3,9 +3,7 @@ use crate::analysis::inference::{Environment, Inferrer, TypedStatement};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::Resolver;
 use crate::lexer::Lexer;
-use crate::parser::{
-    parse_program, Declaration, Statement, TypeAlias, Variant,
-};
+use crate::parser::{Declaration, Statement, TypeAlias, Variant, parse_program};
 use crate::{lexer, parser};
 use anyhow::anyhow;
 

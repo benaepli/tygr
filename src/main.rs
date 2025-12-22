@@ -3,9 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use tygr::compiler::compile;
-use tygr::interpreter::{eval_statement, ValueDisplay};
-use tygr::repl::Repl;
 use tygr::interpreter;
+use tygr::interpreter::{ValueDisplay, eval_statement};
+use tygr::repl::Repl;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
