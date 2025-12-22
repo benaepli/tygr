@@ -11,6 +11,7 @@ use colored::*;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
+#[derive(Default)]
 pub struct Repl {
     resolver: Resolver,
     inferrer: Inferrer,
@@ -19,15 +20,6 @@ pub struct Repl {
 }
 
 impl Repl {
-    pub fn new() -> Self {
-        Self {
-            resolver: Resolver::new(),
-            inferrer: Inferrer::new(),
-            type_env: inference::Environment::new(),
-            runtime_env: interpreter::Environment::new(),
-        }
-    }
-
     pub fn run(&mut self) {
         println!("{} v{}", "Tygr REPL".bold().cyan(), "0.1.0".dimmed());
         println!("Type 'exit' or press Ctrl+D to quit.\n");

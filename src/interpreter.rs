@@ -165,7 +165,7 @@ impl fmt::Display for EvalError {
 pub type EvalResult = Result<Rc<Value>, EvalError>;
 
 /// The execution environment, mapping names to values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Environment {
     bindings: HashMap<Name, Rc<RefCell<Rc<Value>>>>,
 }
@@ -541,8 +541,8 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
         }
         Value::Constructor(variant_id, ctor_id) => Ok(Rc::new(Value::Variant(
             arg,
-            variant_id.clone(),
-            ctor_id.clone(),
+            *variant_id,
+            *ctor_id,
         ))),
         _ => Err(EvalError::NotAFunction),
     }
@@ -552,7 +552,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
     match &expr.kind {
         TypedKind::Var(name) => env
             .get(name)
-            .ok_or_else(|| EvalError::UndefinedVariable(*name)),
+            .ok_or(EvalError::UndefinedVariable(*name)),
         TypedKind::IntLit(i) => Ok(Rc::new(Value::Int(*i))),
         TypedKind::FloatLit(f) => Ok(Rc::new(Value::Float(*f))),
         TypedKind::BoolLit(b) => Ok(Rc::new(Value::Bool(*b))),
@@ -597,7 +597,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
                 if result.is_err() {
                     continue;
                 }
-                return eval(&*branch.expr, &mut new_env);
+                return eval(&branch.expr, &mut new_env);
             }
             Err(EvalError::NonExhaustiveMatch)
         }
@@ -618,8 +618,9 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             let v2 = eval(e2, env)?;
             match &*v2 {
                 Value::List(list) => {
-                    let new_list = vec![v1];
-                    let combined = new_list.iter().chain(list.iter()).cloned().collect();
+                    let mut combined = Vec::with_capacity(list.len() + 1);
+                    combined.push(v1);
+                    combined.extend_from_slice(list);
                     Ok(Rc::new(Value::List(combined)))
                 }
                 _ => Err(EvalError::TypeMismatch(
@@ -655,14 +656,10 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         }
 
         TypedKind::RecRecord(fields) => {
-            let mut placeholders = Vec::new();
             let mut rec_env = env.clone();
-
-            // Placeholders
             for (_label, (name_id, _expr)) in fields.iter() {
                 let placeholder = Rc::new(RefCell::new(Rc::new(Value::Unit)));
                 rec_env.insert_cell(*name_id, placeholder.clone());
-                placeholders.push((*name_id, placeholder));
             }
 
             // Evaluate in the new environment where names point to placeholders.
@@ -675,7 +672,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             // Update the RefCells with the actual evaluated values.
             let mut record_map = HashMap::new();
             for (label, name_id, actual_val) in evaluated_results {
-                let placeholder_cell = rec_env.bindings.get(&name_id).unwrap();
+                let placeholder_cell = rec_env.bindings.get(name_id).unwrap();
                 *placeholder_cell.borrow_mut() = actual_val.clone();
 
                 record_map.insert(label.clone(), (*actual_val).clone());

@@ -267,7 +267,6 @@ where
             let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
             let field = ident
-                .clone()
                 .then_ignore(just(TokenKind::Colon))
                 .then(annot.clone())
                 .map(|(name, typ)| (name, typ));
@@ -408,15 +407,15 @@ where
                 } else {
                     val
                 };
-                if rec_token.is_some() {
-                    if let PatternKind::Var(name) = &pat.kind {
-                        let rec_node =
-                            Expr::new(ExprKind::RecRecord(vec![(name.clone(), value_expr)]), span);
-                        value_expr = Expr::new(
-                            ExprKind::FieldAccess(Box::new(rec_node), name.clone()),
-                            span,
-                        );
-                    }
+                if rec_token.is_some()
+                    && let PatternKind::Var(name) = &pat.kind
+                {
+                    let rec_node =
+                        Expr::new(ExprKind::RecRecord(vec![(name.clone(), value_expr)]), span);
+                    value_expr = Expr::new(
+                        ExprKind::FieldAccess(Box::new(rec_node), name.clone()),
+                        span,
+                    );
                 }
 
                 (pat, value_expr, generics, annot)
@@ -432,7 +431,6 @@ where
         let ident = select! { TokenKind::Identifier(s) => s.clone() };
 
         let field = ident
-            .clone()
             .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
             .map_with(|(name, value_opt), e| match value_opt {
                 Some(value) => (name, value),
@@ -690,7 +688,6 @@ where
                 .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
                 .map_with(|fields, e| Expr::new(ExprKind::RecRecord(fields), e.span())),
             ident
-                .clone()
                 .then(
                     just(TokenKind::Comma)
                         .ignore_then(
@@ -815,13 +812,15 @@ where
     P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
 {
     choice((
-        let_binding(expr_parser.clone()).map_with(|(pat, val, generics, annot), e| {
+        expr_parser
+            .clone()
+            .map_with(|ex, e| Statement::new(StatementKind::Expr(Box::new(ex)), e.span())),
+        let_binding(expr_parser).map_with(|(pat, val, generics, annot), e| {
             Statement::new(
                 StatementKind::Let(pat, Box::new(val), generics, annot),
                 e.span(),
             )
         }),
-        expr_parser.map_with(|ex, e| Statement::new(StatementKind::Expr(Box::new(ex)), e.span())),
     ))
 }
 
@@ -830,9 +829,9 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     choice((
-        type_alias().map(|t| Declaration::Type(t)),
-        variant().map(|v| Declaration::Variant(v)),
-        statement(expr()).map(|l| Declaration::Statement(l)),
+        type_alias().map(Declaration::Type),
+        variant().map(Declaration::Variant),
+        statement(expr()).map(Declaration::Statement),
     ))
 }
 
@@ -855,7 +854,7 @@ pub fn make_input(
 
 pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
-    let input = make_input((0..len).into(), &tokens);
+    let input = make_input((0..len).into(), tokens);
 
     program().parse(input)
 }

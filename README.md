@@ -39,7 +39,6 @@ Clone the repository and build the project using Cargo:
 git clone https://github.com/benaepli/tygr.git
 cd tygr
 cargo build --release
-
 ```
 
 ### Running Programs
@@ -63,8 +62,7 @@ directory.
 
 Here are a couple:
 
-* [examples/reduce.tygr](examples/reduce.tygr): Demonstrates list processing (
-  fold_left/fold_right) and recursion.
+* [examples/reduce.tygr](examples/reduce.tygr): Demonstrates list processing (`fold_left`/`fold_right`) and recursion.
 * [examples/mutual.tygr](examples/mutual.tygr): Demonstrates mutual recursion using
   recursive records.
 * [examples/calculator.tygr](examples/calculator.tygr): A simple calculator using recursive variants.

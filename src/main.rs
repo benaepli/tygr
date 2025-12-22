@@ -20,7 +20,7 @@ fn main() {
 
     match cli.file_path {
         Some(path) => run_file(path),
-        None => Repl::new().run(),
+        None => Repl::default().run(),
     }
 }
 

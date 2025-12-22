@@ -81,7 +81,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.ty.as_ref().ty {
             TypeKind::Var(id) => write!(f, "{}", id),
-            TypeKind::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(&id)),
+            TypeKind::Con(id) => write!(f, "{}", self.name_table.lookup_type_name(id)),
             TypeKind::App(lhs, rhs) => {
                 let lhs_display = TypeDisplay::new(lhs.clone(), self.name_table);
                 let rhs_display = TypeDisplay::new(rhs.clone(), self.name_table);
@@ -255,6 +255,12 @@ pub struct Inferrer {
     variants: HashMap<TypeName, TypedVariant>,
 }
 
+impl Default for Inferrer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Inferrer {
     pub fn new() -> Self {
         Self {
@@ -421,7 +427,7 @@ impl Inferrer {
             let kind = self.new_kind();
             let ty = Type::new(TypeKind::Var(id), kind);
             param_types.push(ty.clone());
-            self.type_ctx.insert(param_id.clone(), ty);
+            self.type_ctx.insert(param_id, ty);
             params.push(id);
         }
 
@@ -508,11 +514,10 @@ impl Inferrer {
         for (var, kind) in &scheme.vars {
             mapping.insert(*var, Type::new(self.new_type(), kind.clone()));
         }
-        self.instantiate_with_mapping(&scheme.ty, &mapping)
+        Self::instantiate_with_mapping(&scheme.ty, &mapping)
     }
 
     fn instantiate_with_mapping(
-        &self,
         ty: &Rc<Type>,
         mapping: &HashMap<TypeID, Rc<Type>>,
     ) -> Rc<Type> {
@@ -525,24 +530,24 @@ impl Inferrer {
                 }
             }
             TypeKind::Pair(a, b) => {
-                let new_a = self.instantiate_with_mapping(a, mapping);
-                let new_b = self.instantiate_with_mapping(b, mapping);
+                let new_a = Self::instantiate_with_mapping(a, mapping);
+                let new_b = Self::instantiate_with_mapping(b, mapping);
                 Type::new(TypeKind::Pair(new_a, new_b), ty.kind.clone())
             }
             TypeKind::Function(arg, ret) => {
-                let new_arg = self.instantiate_with_mapping(arg, mapping);
-                let new_ret = self.instantiate_with_mapping(ret, mapping);
+                let new_arg = Self::instantiate_with_mapping(arg, mapping);
+                let new_ret = Self::instantiate_with_mapping(ret, mapping);
                 Type::new(TypeKind::Function(new_arg, new_ret), ty.kind.clone())
             }
             TypeKind::App(lhs, rhs) => {
-                let new_lhs = self.instantiate_with_mapping(lhs, mapping);
-                let new_rhs = self.instantiate_with_mapping(rhs, mapping);
+                let new_lhs = Self::instantiate_with_mapping(lhs, mapping);
+                let new_rhs = Self::instantiate_with_mapping(rhs, mapping);
                 Type::new(TypeKind::App(new_lhs, new_rhs), ty.kind.clone())
             }
             TypeKind::Record(fields) => {
                 let mut new_fields = BTreeMap::new();
                 for (name, t) in fields {
-                    new_fields.insert(name.clone(), self.instantiate_with_mapping(t, mapping));
+                    new_fields.insert(name.clone(), Self::instantiate_with_mapping(t, mapping));
                 }
                 Type::new(TypeKind::Record(new_fields), ty.kind.clone())
             }

@@ -242,6 +242,12 @@ pub struct Resolver {
     type_name_origins: HashMap<TypeName, String>,
 }
 
+impl Default for Resolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Resolver {
     pub fn new() -> Self {
         let mut resolver = Self {
@@ -280,7 +286,6 @@ impl Resolver {
     }
 
     fn instantiate_alias(
-        &self,
         template: &ResolvedAnnotation,
         substitutions: &HashMap<TypeName, ResolvedAnnotation>,
     ) -> ResolvedAnnotation {
@@ -293,20 +298,20 @@ impl Resolver {
                 ResolvedAnnotationKind::Var(*id)
             }
             ResolvedAnnotationKind::App(lhs, rhs) => ResolvedAnnotationKind::App(
-                Box::new(self.instantiate_alias(lhs, substitutions)),
-                Box::new(self.instantiate_alias(rhs, substitutions)),
+                Box::new(Self::instantiate_alias(lhs, substitutions)),
+                Box::new(Self::instantiate_alias(rhs, substitutions)),
             ),
             ResolvedAnnotationKind::Pair(lhs, rhs) => ResolvedAnnotationKind::Pair(
-                Box::new(self.instantiate_alias(lhs, substitutions)),
-                Box::new(self.instantiate_alias(rhs, substitutions)),
+                Box::new(Self::instantiate_alias(lhs, substitutions)),
+                Box::new(Self::instantiate_alias(rhs, substitutions)),
             ),
             ResolvedAnnotationKind::Lambda(param, ret) => ResolvedAnnotationKind::Lambda(
-                Box::new(self.instantiate_alias(param, substitutions)),
-                Box::new(self.instantiate_alias(ret, substitutions)),
+                Box::new(Self::instantiate_alias(param, substitutions)),
+                Box::new(Self::instantiate_alias(ret, substitutions)),
             ),
             ResolvedAnnotationKind::Record(m) => ResolvedAnnotationKind::Record(
                 m.iter()
-                    .map(|(k, v)| (k.clone(), self.instantiate_alias(v, substitutions)))
+                    .map(|(k, v)| (k.clone(), Self::instantiate_alias(v, substitutions)))
                     .collect(),
             ),
         };
@@ -363,7 +368,7 @@ impl Resolver {
                         span,
                     )))
                 } else {
-                    return Err(ResolutionError::VariableNotFound(name, span));
+                    Err(ResolutionError::VariableNotFound(name, span))
                 }
             }
 
@@ -379,7 +384,7 @@ impl Resolver {
                     subs.insert(pending.remove(0), arg);
 
                     if pending.is_empty() {
-                        Ok(Partial::Done(self.instantiate_alias(&body, &subs)))
+                        Ok(Partial::Done(Self::instantiate_alias(&body, &subs)))
                     } else {
                         Ok(Partial::Alias {
                             name,
