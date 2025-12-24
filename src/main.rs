@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use tygr::compiler::compile_script;
+use tygr::custom::CustomFnRegistry;
 use tygr::interpreter;
 use tygr::interpreter::{ValueDisplay, eval_statement};
 use tygr::repl::Repl;
@@ -46,10 +47,11 @@ fn run_script(path: PathBuf) {
     };
 
     let mut env = interpreter::Environment::new();
+    let custom_fns = CustomFnRegistry::new();
     let mut last_result = None;
 
     for stmt in typed {
-        match eval_statement(&mut env, &stmt) {
+        match eval_statement(&mut env, &stmt, &custom_fns) {
             Ok(result) => last_result = Some(result),
             Err(e) => {
                 eprintln!("Runtime error: {}", e);

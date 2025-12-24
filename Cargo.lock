@@ -650,6 +650,7 @@ dependencies = [
  "clap",
  "codespan-reporting",
  "colored",
+ "js-sys",
  "petgraph",
  "phf",
  "phf_macros",

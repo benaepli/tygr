@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Name(pub usize);
 
 impl fmt::Display for Name {
@@ -16,7 +16,7 @@ impl fmt::Display for Name {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TypeName(pub usize);
 
 impl fmt::Display for TypeName {
@@ -292,6 +292,21 @@ impl Resolver {
         }
         resolver.scopes.push(global);
         resolver
+    }
+
+    /// Register a custom function name in the global scope.
+    /// Returns the assigned Name ID, or an error if the name already exists.
+    pub fn register_custom(&mut self, name: &str) -> Result<Name, ResolutionError> {
+        if self.scopes[0].contains_key(name) {
+            return Err(ResolutionError::DuplicateBinding(
+                name.to_string(),
+                (0..0).into(),
+            ));
+        }
+        let id = self.new_name();
+        self.name_origins.insert(id, name.to_string());
+        self.scopes[0].insert(name.to_string(), id);
+        Ok(id)
     }
 
     fn instantiate_alias(

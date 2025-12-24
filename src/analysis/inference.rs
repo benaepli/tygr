@@ -15,17 +15,17 @@ use std::hash::Hash;
 use std::rc::Rc;
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Star,
     Arrow(Rc<Kind>, Rc<Kind>),
     Var(KindID),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct KindID(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TypeID(pub usize);
 
 impl fmt::Display for TypeID {
@@ -34,13 +34,13 @@ impl fmt::Display for TypeID {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TypeScheme {
     pub vars: Vec<(TypeID, Rc<Kind>)>,
     pub ty: Rc<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Type {
     pub ty: TypeKind,
     pub kind: Rc<Kind>,
@@ -56,7 +56,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TypeKind {
     Var(TypeID),
     Con(TypeName),
@@ -268,6 +268,8 @@ pub struct Inferrer {
     type_ctx: TypeContext,
 
     variants: HashMap<TypeName, TypedVariant>,
+
+    custom_schemes: HashMap<Name, TypeScheme>,
 }
 
 impl Default for Inferrer {
@@ -288,7 +290,17 @@ impl Inferrer {
             type_ctx: HashMap::new(),
 
             variants: HashMap::new(),
+
+            custom_schemes: HashMap::new(),
         }
+    }
+
+    pub fn register_custom_type(&mut self, name: Name, scheme: TypeScheme) {
+        self.custom_schemes.insert(name, scheme);
+    }
+
+    pub fn get_custom_scheme(&self, name: &Name) -> Option<&TypeScheme> {
+        self.custom_schemes.get(name)
     }
 
     fn new_kind(&mut self) -> Rc<Kind> {

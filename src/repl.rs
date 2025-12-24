@@ -1,28 +1,79 @@
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
-use crate::analysis::resolver::Resolver;
-use crate::interpreter::{ValueDisplay, eval_statement};
+use crate::analysis::resolver::{Resolver, ResolutionError};
+use crate::custom::{CustomFn, CustomFnRegistry};
+use crate::interpreter::{eval_statement, Value, ValueDisplay};
 use crate::lexer::Lexer;
-use crate::parser::{ReplStatement, make_input};
+use crate::parser::{make_input, ReplStatement};
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
 use codespan_reporting::term::termcolor::{Color, ColorSpec, WriteColor};
 use colored::Colorize;
 #[cfg(feature = "cli")]
-use rustyline::DefaultEditor;
-#[cfg(feature = "cli")]
 use rustyline::error::ReadlineError;
+#[cfg(feature = "cli")]
+use rustyline::DefaultEditor;
+use std::rc::Rc;
+use thiserror::Error;
 
-#[derive(Default)]
+#[derive(Debug, Error)]
+pub enum ReplError {
+    #[error("Failed to register custom function '{name}': {source}")]
+    CustomFunctionRegistration {
+        name: String,
+        #[source]
+        source: ResolutionError,
+    },
+}
+
 pub struct Repl {
     resolver: Resolver,
     inferrer: Inferrer,
     type_env: inference::Environment,
     pub runtime_env: interpreter::Environment,
+    custom_fns: CustomFnRegistry,
+}
+
+impl Default for Repl {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Repl {
+    pub fn new() -> Self {
+        Self {
+            resolver: Resolver::default(),
+            inferrer: Inferrer::default(),
+            type_env: inference::Environment::new(),
+            runtime_env: interpreter::Environment::default(),
+            custom_fns: CustomFnRegistry::new(),
+        }
+    }
+    
+    pub fn register_custom_fn(&mut self, func: impl CustomFn) -> Result<(), ReplError> {
+        let name_str = func.name().to_string();
+        let scheme = func.type_scheme();
+        let func = Rc::new(func);
+
+        let name_id = self
+            .resolver
+            .register_custom(&name_str)
+            .map_err(|source| ReplError::CustomFunctionRegistration {
+                name: name_str.clone(),
+                source,
+            })?;
+
+        self.inferrer.register_custom_type(name_id, scheme.clone());
+        self.type_env.insert(name_id, scheme);
+        let custom_id = self.custom_fns.register(name_id, func);
+        self.runtime_env
+            .insert(name_id, Rc::new(Value::Custom(custom_id)));
+
+        Ok(())
+    }
+
     #[cfg(feature = "cli")]
     pub fn run(&mut self) {
         println!("{} v{}", "Tygr REPL".bold().cyan(), "0.1.0".dimmed());
@@ -147,7 +198,7 @@ impl Repl {
             }
         };
 
-        match eval_statement(&mut self.runtime_env, &typed) {
+        match eval_statement(&mut self.runtime_env, &typed, &self.custom_fns) {
             Ok(val) => {
                 let nt = self.resolver.snapshot_name_table();
                 let _ = write!(writer, "  ");

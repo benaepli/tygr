@@ -5,6 +5,7 @@ use crate::analysis::inference::{
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
 use crate::builtin::BuiltinFn;
+use crate::custom::{CustomFnId, CustomFnRegistry};
 use crate::parser::BinOp;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,7 +13,8 @@ use std::fmt;
 use std::io::Write;
 use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "value")]
 pub enum Value {
     Unit,
     Int(i64),
@@ -22,21 +24,35 @@ pub enum Value {
     List(Vec<Rc<Value>>),
     Pair(Rc<Value>, Rc<Value>),
     /// A standard first-class function, capturing its environment upon creation.
+    #[serde(skip)]
     Closure {
         param: TypedPattern,
         body: Box<Typed>,
         env: Environment,
     },
     /// A partially-applied built-in function, collecting arguments.
+    #[serde(skip)]
     PartialBuiltin {
         func: BuiltinFn,
         args: Vec<Rc<Value>>,
     },
     /// A built-in function implemented in Rust.
+    #[serde(skip)]
     Builtin(BuiltinFn),
     Record(HashMap<String, Value>),
+    #[serde(skip)]
     Constructor(TypeName, Name),
+    #[serde(skip)]
     Variant(Rc<Value>, TypeName, Name),
+    /// A custom function implemented via the CustomFn trait.
+    #[serde(skip)]
+    Custom(CustomFnId),
+    /// A partially-applied custom function, collecting arguments.
+    #[serde(skip)]
+    PartialCustom {
+        id: CustomFnId,
+        args: Vec<Rc<Value>>,
+    },
 }
 
 impl fmt::Debug for Value {
@@ -67,6 +83,12 @@ impl fmt::Debug for Value {
             Value::Variant(val, _def_id, name) => f
                 .debug_tuple(&format!("Variant::{}", name))
                 .field(val)
+                .finish(),
+            Value::Custom(id) => write!(f, "<custom:{}>", id),
+            Value::PartialCustom { id, args } => f
+                .debug_struct("PartialCustom")
+                .field("id", id)
+                .field("args", args)
                 .finish(),
         }
     }
@@ -110,6 +132,8 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
             Value::Closure { .. } => write!(f, "<closure>"),
             Value::PartialBuiltin { .. } => write!(f, "<partial_builtin>"),
             Value::Builtin(_) => write!(f, "<builtin>"),
+            Value::Custom(_) => write!(f, "<custom>"),
+            Value::PartialCustom { .. } => write!(f, "<partial_custom>"),
             Value::Record(fields) => {
                 write!(f, "{{ ")?;
                 let mut first = true;
@@ -533,7 +557,12 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>], env: &mut Environment) -> Eva
     }
 }
 
-fn apply(func: Rc<Value>, arg: Rc<Value>, env: &mut Environment) -> EvalResult {
+fn apply(
+    func: Rc<Value>,
+    arg: Rc<Value>,
+    env: &mut Environment,
+    custom_fns: &CustomFnRegistry,
+) -> EvalResult {
     match &*func {
         Value::Closure {
             param,
@@ -542,7 +571,7 @@ fn apply(func: Rc<Value>, arg: Rc<Value>, env: &mut Environment) -> EvalResult {
         } => {
             let mut new_env = captured_env.clone();
             bind_pattern(param, arg, &mut new_env)?;
-            eval(body, &mut new_env)
+            eval(body, &mut new_env, custom_fns)
         }
         Value::Builtin(b) => {
             let arity = builtin_arity(b);
@@ -569,6 +598,37 @@ fn apply(func: Rc<Value>, arg: Rc<Value>, env: &mut Environment) -> EvalResult {
                 }))
             }
         }
+        Value::Custom(id) => {
+            let custom_fn = custom_fns
+                .get(*id)
+                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+            let arity = custom_fn.arity();
+            if arity == 1 {
+                custom_fn.call(&[arg], env)
+            } else {
+                Ok(Rc::new(Value::PartialCustom {
+                    id: *id,
+                    args: vec![arg],
+                }))
+            }
+        }
+        Value::PartialCustom { id, args } => {
+            let custom_fn = custom_fns
+                .get(*id)
+                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+            let arity = custom_fn.arity();
+            let mut new_args = args.clone();
+            new_args.push(arg);
+
+            if new_args.len() == arity {
+                custom_fn.call(&new_args, env)
+            } else {
+                Ok(Rc::new(Value::PartialCustom {
+                    id: *id,
+                    args: new_args,
+                }))
+            }
+        }
         Value::Constructor(variant_id, ctor_id) => {
             Ok(Rc::new(Value::Variant(arg, *variant_id, *ctor_id)))
         }
@@ -576,7 +636,7 @@ fn apply(func: Rc<Value>, arg: Rc<Value>, env: &mut Environment) -> EvalResult {
     }
 }
 
-fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
+fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> EvalResult {
     match &expr.kind {
         TypedKind::Var(name) => env.get(name).ok_or(EvalError::UndefinedVariable(*name)),
         TypedKind::IntLit(i) => Ok(Rc::new(Value::Int(*i))),
@@ -585,8 +645,8 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         TypedKind::StringLit(s) => Ok(Rc::new(Value::String(Rc::new(s.clone())))),
         TypedKind::UnitLit => Ok(Rc::new(Value::Unit)),
         TypedKind::PairLit(e1, e2) => {
-            let v1 = eval(e1, env)?;
-            let v2 = eval(e2, env)?;
+            let v1 = eval(e1, env, custom_fns)?;
+            let v2 = eval(e2, env, custom_fns)?;
             Ok(Rc::new(Value::Pair(v1, v2)))
         }
         TypedKind::Lambda { param, body, .. } => Ok(Rc::new(Value::Closure {
@@ -595,19 +655,19 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             env: env.clone(),
         })),
         TypedKind::Let { name, value, body } => {
-            let val = eval(value, env)?;
+            let val = eval(value, env, custom_fns)?;
             let mut new_env = env.clone();
             bind_pattern(name, val, &mut new_env)?;
-            eval(body, &mut new_env)
+            eval(body, &mut new_env, custom_fns)
         }
         TypedKind::If(cond, then_branch, else_branch) => {
-            let cond_val = eval(cond, env)?;
+            let cond_val = eval(cond, env, custom_fns)?;
             match &*cond_val {
                 Value::Bool(b) => {
                     if *b {
-                        eval(then_branch, env)
+                        eval(then_branch, env, custom_fns)
                     } else {
-                        eval(else_branch, env)
+                        eval(else_branch, env, custom_fns)
                     }
                 }
                 _ => Err(EvalError::TypeMismatch(
@@ -616,32 +676,32 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             }
         }
         TypedKind::Match(expr, branches) => {
-            let val = eval(expr, env)?;
+            let val = eval(expr, env, custom_fns)?;
             let mut new_env = env.clone();
             for branch in branches {
                 let result = bind_pattern(&branch.pattern, val.clone(), &mut new_env);
                 if result.is_err() {
                     continue;
                 }
-                return eval(&branch.expr, &mut new_env);
+                return eval(&branch.expr, &mut new_env, custom_fns);
             }
             Err(EvalError::NonExhaustiveMatch)
         }
         TypedKind::App(func_expr, arg_expr) => {
-            let func_val = eval(func_expr, env)?;
-            let arg_val = eval(arg_expr, env)?;
-            apply(func_val, arg_val, env)
+            let func_val = eval(func_expr, env, custom_fns)?;
+            let arg_val = eval(arg_expr, env, custom_fns)?;
+            apply(func_val, arg_val, env, custom_fns)
         }
         TypedKind::BinOp(op, lhs, rhs) => {
-            let left = eval(lhs, env)?;
-            let right = eval(rhs, env)?;
+            let left = eval(lhs, env, custom_fns)?;
+            let right = eval(rhs, env, custom_fns)?;
             eval_binop(op.clone(), left, right)
         }
         TypedKind::Builtin(b) => Ok(Rc::new(Value::Builtin(b.clone()))),
         TypedKind::EmptyListLit => Ok(Rc::new(Value::List(vec![]))),
         TypedKind::Cons(e1, e2) => {
-            let v1 = eval(e1, env)?;
-            let v2 = eval(e2, env)?;
+            let v1 = eval(e1, env, custom_fns)?;
+            let v2 = eval(e2, env, custom_fns)?;
             match &*v2 {
                 Value::List(list) => {
                     let mut combined = Vec::with_capacity(list.len() + 1);
@@ -657,13 +717,13 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         TypedKind::RecordLit(fields) => {
             let mut record_fields = HashMap::new();
             for (name, expr) in fields {
-                let value = eval(expr, env)?;
+                let value = eval(expr, env, custom_fns)?;
                 record_fields.insert(name.clone(), (*value).clone());
             }
             Ok(Rc::new(Value::Record(record_fields)))
         }
         TypedKind::FieldAccess(record_expr, field_name) => {
-            let record_val = eval(record_expr, env)?;
+            let record_val = eval(record_expr, env, custom_fns)?;
             match &*record_val {
                 Value::Record(fields) => fields
                     .get(field_name)
@@ -691,7 +751,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             // Evaluate in the new environment where names point to placeholders.
             let mut evaluated_results = Vec::new();
             for (label, (name_id, expr)) in fields {
-                let val = eval(expr, &mut rec_env)?;
+                let val = eval(expr, &mut rec_env, custom_fns)?;
                 evaluated_results.push((label, name_id, val));
             }
 
@@ -712,17 +772,17 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
             for stmt in statements {
                 match &stmt.kind {
                     TypedStatementKind::Let { pattern, value } => {
-                        let val = eval(value, &mut block_env)?;
+                        let val = eval(value, &mut block_env, custom_fns)?;
                         bind_pattern(pattern, val, &mut block_env)?;
                     }
                     TypedStatementKind::Expr(expr) => {
-                        eval(expr, &mut block_env)?;
+                        eval(expr, &mut block_env, custom_fns)?;
                     }
                 }
             }
 
             match tail {
-                Some(tail_expr) => eval(tail_expr, &mut block_env),
+                Some(tail_expr) => eval(tail_expr, &mut block_env, custom_fns),
                 None => Ok(Rc::new(Value::Unit)),
             }
         }
@@ -732,25 +792,34 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
 /// Creates an initial empty environment and starts evaluation.
 pub fn eval_expr(expr: &Typed) -> EvalResult {
     let mut initial_env = Environment::new();
-    eval(expr, &mut initial_env)
+    let custom_fns = CustomFnRegistry::new();
+    eval(expr, &mut initial_env, &custom_fns)
 }
 
-pub fn eval_statement(env: &mut Environment, stmt: &TypedStatement) -> EvalResult {
+pub fn eval_statement(
+    env: &mut Environment,
+    stmt: &TypedStatement,
+    custom_fns: &CustomFnRegistry,
+) -> EvalResult {
     match &stmt.kind {
         TypedStatementKind::Let { pattern, value } => {
-            let val = eval(value, env)?;
+            let val = eval(value, env, custom_fns)?;
             bind_pattern(pattern, val.clone(), env)?;
             Ok(val)
         }
-        TypedStatementKind::Expr(expr) => eval(expr, env),
+        TypedStatementKind::Expr(expr) => eval(expr, env, custom_fns),
     }
 }
 
-pub fn eval_groups(env: &mut Environment, groups: Vec<TypedGroup>) -> Result<(), EvalError> {
+pub fn eval_groups(
+    env: &mut Environment,
+    groups: Vec<TypedGroup>,
+    custom_fns: &CustomFnRegistry,
+) -> Result<(), EvalError> {
     for group in groups {
         match group {
             TypedGroup::NonRecursive(def) => {
-                let val = eval(&def.expr, env)?;
+                let val = eval(&def.expr, env, custom_fns)?;
                 env.insert(def.name.0, val);
             }
             TypedGroup::Recursive(defs) => {
@@ -762,7 +831,7 @@ pub fn eval_groups(env: &mut Environment, groups: Vec<TypedGroup>) -> Result<(),
                 }
 
                 for def in defs {
-                    let val = eval(&def.expr, env)?;
+                    let val = eval(&def.expr, env, custom_fns)?;
                     let cell = cells.get(&def.name.0).unwrap();
                     *cell.borrow_mut() = val;
                 }
@@ -772,17 +841,15 @@ pub fn eval_groups(env: &mut Environment, groups: Vec<TypedGroup>) -> Result<(),
     Ok(())
 }
 
-pub fn run_main(env: &Environment, main_name: Name) -> EvalResult {
+pub fn run_main(
+    env: &mut Environment,
+    main_name: Name,
+    custom_fns: &CustomFnRegistry,
+) -> EvalResult {
     let main_val = env
         .get(&main_name)
         .ok_or(EvalError::UndefinedVariable(main_name))?;
 
-    // We need a mutable environment to run the main function if it does IO.
-    // However, the signature here takes &Environment.
-    // We should probably change the signature of run_main to take &mut Environment.
-    // But since Environment uses interior mutability for bindings AND output,
-    // we might be able to get away with cloning it or just making it mutable.
-    // Actually apply takes &mut Environment.
-    let mut env_clone = env.clone();
-    apply(main_val, Rc::new(Value::Unit), &mut env_clone)
+
+    apply(main_val, Rc::new(Value::Unit), env, custom_fns)
 }
