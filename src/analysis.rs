@@ -1,5 +1,7 @@
+pub mod dependencies;
 pub mod format;
 pub mod inference;
+pub mod main_function;
 pub mod name_table;
 pub mod resolver;
 
@@ -36,5 +38,33 @@ pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
     Expr {
         kind,
         span: pattern.span,
+    }
+}
+
+pub fn is_static(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::UnitLit
+        | ExprKind::EmptyListLit => true,
+
+        ExprKind::Lambda(..) => true,
+
+        ExprKind::PairLit(a, b) => is_static(a) && is_static(b),
+        ExprKind::Cons(head, tail) => is_static(head) && is_static(tail),
+        ExprKind::RecordLit(fields) => fields.iter().all(|(_, e)| is_static(e)),
+
+        ExprKind::App(..)
+        | ExprKind::If(..)
+        | ExprKind::Match(..)
+        | ExprKind::Let(..)
+        | ExprKind::Block(..)
+        | ExprKind::BinOp(..) => false,
+
+        ExprKind::Var(_) => true,
+        ExprKind::RecRecord(_) => false,
+        ExprKind::FieldAccess(_, _) => false,
     }
 }

@@ -4,9 +4,10 @@ use crate::analysis::resolver::ResolutionError;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFiles;
 use codespan_reporting::term;
-use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+use codespan_reporting::term::WriteStyle;
 
 pub fn report_resolution_errors(
+    writer: &mut impl WriteStyle,
     source: &str,
     errors: &[ResolutionError],
     filename: &str,
@@ -14,7 +15,6 @@ pub fn report_resolution_errors(
     let mut files = SimpleFiles::new();
     let file_id = files.add(filename, source);
 
-    let writer = StandardStream::stderr(ColorChoice::Auto);
     let config = term::Config::default();
 
     for error in errors {
@@ -90,13 +90,14 @@ pub fn report_resolution_errors(
                 .with_notes(vec!["constructors must be defined before use".to_string()]),
         };
 
-        term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_write_style(writer, &config, &files, &diagnostic)?;
     }
 
     Ok(())
 }
 
 pub fn report_type_errors(
+    writer: &mut impl WriteStyle,
     source: &str,
     errors: &[TypeError],
     filename: &str,
@@ -105,7 +106,6 @@ pub fn report_type_errors(
     let mut files = SimpleFiles::new();
     let file_id = files.add(filename, source);
 
-    let writer = StandardStream::stderr(ColorChoice::Auto);
     let config = term::Config::default();
 
     for error in errors {
@@ -202,7 +202,7 @@ pub fn report_type_errors(
                 ]),
         };
 
-        term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_write_style(writer, &config, &files, &diagnostic)?;
     }
 
     Ok(())

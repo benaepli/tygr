@@ -2,13 +2,14 @@ use crate::lexer::LexError;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFiles;
 use codespan_reporting::term;
-use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+use codespan_reporting::term::WriteStyle;
 
 /// Reports lexer errors using codespan-reporting.
 ///
 /// This function takes a source string and a list of lexer errors, and prints
-/// nicely formatted error messages with source code context to stderr.
+/// nicely formatted error messages with source code context to the provided writer.
 pub fn report_errors(
+    writer: &mut impl WriteStyle,
     source: &str,
     errors: &[LexError],
     filename: &str,
@@ -16,7 +17,6 @@ pub fn report_errors(
     let mut files = SimpleFiles::new();
     let file_id = files.add(filename, source);
 
-    let writer = StandardStream::stderr(ColorChoice::Auto);
     let config = term::Config::default();
 
     for error in errors {
@@ -38,7 +38,7 @@ pub fn report_errors(
                 ]),
         };
 
-        term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)?;
+        term::emit_to_write_style(writer, &config, &files, &diagnostic)?;
     }
 
     Ok(())

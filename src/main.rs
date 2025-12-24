@@ -1,8 +1,10 @@
 use clap::Parser;
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
-use tygr::compiler::compile;
+use tygr::compiler::compile_script;
+use tygr::custom::CustomFnRegistry;
 use tygr::interpreter;
 use tygr::interpreter::{ValueDisplay, eval_statement};
 use tygr::repl::Repl;
@@ -19,12 +21,12 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.file_path {
-        Some(path) => run_file(path),
+        Some(path) => run_script(path),
         None => Repl::default().run(),
     }
 }
 
-fn run_file(path: PathBuf) {
+fn run_script(path: PathBuf) {
     let filename_str = path.display().to_string();
 
     let input = match fs::read_to_string(&path) {
@@ -35,7 +37,8 @@ fn run_file(path: PathBuf) {
         }
     };
 
-    let (typed, name_table) = match compile(&input, &filename_str) {
+    let mut writer = StandardStream::stderr(ColorChoice::Auto);
+    let (typed, name_table) = match compile_script(&input, &filename_str, &mut writer) {
         Err(e) => {
             eprintln!("Terminating with error: {}", e);
             return;
@@ -44,10 +47,11 @@ fn run_file(path: PathBuf) {
     };
 
     let mut env = interpreter::Environment::new();
+    let custom_fns = CustomFnRegistry::new();
     let mut last_result = None;
 
     for stmt in typed {
-        match eval_statement(&mut env, &stmt) {
+        match eval_statement(&mut env, &stmt, &custom_fns) {
             Ok(result) => last_result = Some(result),
             Err(e) => {
                 eprintln!("Runtime error: {}", e);
