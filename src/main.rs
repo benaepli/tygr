@@ -1,4 +1,5 @@
 use clap::Parser;
+use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
 use std::fs;
 use std::path::PathBuf;
 use std::process;
@@ -35,7 +36,8 @@ fn run_script(path: PathBuf) {
         }
     };
 
-    let (typed, name_table) = match compile_script(&input, &filename_str) {
+    let mut writer = StandardStream::stderr(ColorChoice::Auto);
+    let (typed, name_table) = match compile_script(&input, &filename_str, &mut writer) {
         Err(e) => {
             eprintln!("Terminating with error: {}", e);
             return;

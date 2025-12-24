@@ -9,6 +9,7 @@ use crate::parser::BinOp;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -166,15 +167,38 @@ impl fmt::Display for EvalError {
 pub type EvalResult = Result<Rc<Value>, EvalError>;
 
 /// The execution environment, mapping names to values.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct Environment {
     bindings: HashMap<Name, Rc<RefCell<Rc<Value>>>>,
+    pub output: Rc<RefCell<dyn Write>>,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for Environment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Environment")
+            .field("bindings", &self.bindings)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Environment {
     pub fn new() -> Self {
         Environment {
             bindings: HashMap::new(),
+            output: Rc::new(RefCell::new(std::io::stdout())),
+        }
+    }
+
+    pub fn with_output(output: Rc<RefCell<dyn Write>>) -> Self {
+        Environment {
+            bindings: HashMap::new(),
+            output,
         }
     }
 
@@ -347,7 +371,7 @@ fn builtin_arity(builtin: &BuiltinFn) -> usize {
     }
 }
 
-fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
+fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>], env: &mut Environment) -> EvalResult {
     use BuiltinFn::*;
     // Helper macro to reduce boilerplate for extracting typed values.
     macro_rules! as_int {
@@ -481,7 +505,12 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
 
         Print => {
             let s = as_string!(&args[0]);
-            println!("{}", s);
+            let mut out = env.output.borrow_mut();
+            if let Err(_) = writeln!(out, "{}", s) {
+                // In a robust system we might want to return an IO error,
+                // but for now we'll just ignore it or log it?
+                // Alternatively, return EvalError.
+            }
             Ok(Rc::new(Value::String(s)))
         }
         StringOfFloat => Ok(Rc::new(Value::String(Rc::new(
@@ -504,7 +533,7 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>]) -> EvalResult {
     }
 }
 
-fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
+fn apply(func: Rc<Value>, arg: Rc<Value>, env: &mut Environment) -> EvalResult {
     match &*func {
         Value::Closure {
             param,
@@ -518,7 +547,7 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
         Value::Builtin(b) => {
             let arity = builtin_arity(b);
             if arity == 1 {
-                eval_builtin(b.clone(), &[arg])
+                eval_builtin(b.clone(), &[arg], env)
             } else {
                 Ok(Rc::new(Value::PartialBuiltin {
                     func: b.clone(),
@@ -532,7 +561,7 @@ fn apply(func: Rc<Value>, arg: Rc<Value>) -> EvalResult {
             new_args.push(arg);
 
             if new_args.len() == arity {
-                eval_builtin(func.clone(), &new_args)
+                eval_builtin(func.clone(), &new_args, env)
             } else {
                 Ok(Rc::new(Value::PartialBuiltin {
                     func: func.clone(),
@@ -601,7 +630,7 @@ fn eval(expr: &Typed, env: &mut Environment) -> EvalResult {
         TypedKind::App(func_expr, arg_expr) => {
             let func_val = eval(func_expr, env)?;
             let arg_val = eval(arg_expr, env)?;
-            apply(func_val, arg_val)
+            apply(func_val, arg_val, env)
         }
         TypedKind::BinOp(op, lhs, rhs) => {
             let left = eval(lhs, env)?;
@@ -748,5 +777,12 @@ pub fn run_main(env: &Environment, main_name: Name) -> EvalResult {
         .get(&main_name)
         .ok_or(EvalError::UndefinedVariable(main_name))?;
 
-    apply(main_val, Rc::new(Value::Unit))
+    // We need a mutable environment to run the main function if it does IO.
+    // However, the signature here takes &Environment.
+    // We should probably change the signature of run_main to take &mut Environment.
+    // But since Environment uses interior mutability for bindings AND output,
+    // we might be able to get away with cloning it or just making it mutable.
+    // Actually apply takes &mut Environment.
+    let mut env_clone = env.clone();
+    apply(main_val, Rc::new(Value::Unit), &mut env_clone)
 }
