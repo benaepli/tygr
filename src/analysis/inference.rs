@@ -136,7 +136,7 @@ pub enum TypedPatternKind {
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
     Record(BTreeMap<String, TypedPattern>),
-    Constructor(TypeName, Name, Box<TypedPattern>),
+    Constructor(TypeName, Name, Option<Box<TypedPattern>>),
 }
 
 #[derive(Debug, Clone)]
@@ -206,7 +206,11 @@ pub enum TypedKind {
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
-    Constructor(TypeName, Name),
+    Constructor {
+        variant: TypeName,
+        ctor: Name,
+        nullary: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -451,7 +455,10 @@ impl Inferrer {
 
         let mut inferred_constructors = Vec::new();
         for (name, ctor) in variant.constructors {
-            let ty = self.instantiate_annotation(&ctor.annotation)?;
+            let ty = match &ctor.annotation {
+                Some(annot) => Some(self.instantiate_annotation(annot)?),
+                None => None,
+            };
             inferred_constructors.push((name, ty));
         }
 
@@ -470,14 +477,18 @@ impl Inferrer {
             .collect();
         let mut schemes = HashMap::new();
 
-        for (name, arg_ty) in inferred_constructors {
+        for (name, arg_ty_opt) in inferred_constructors {
             let ret_ty = self.apply_wrap(variant_ty.clone(), &param_types);
 
+            let ctor_ty = match arg_ty_opt {
+                Some(arg_ty) => Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
+                None => ret_ty,
+            };
             schemes.insert(
                 name,
                 TypeScheme {
                     vars: scheme_vars.clone(),
-                    ty: Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
+                    ty: ctor_ty,
                 },
             );
         }
@@ -798,18 +809,35 @@ impl Inferrer {
                 };
 
                 let ctor_ty = self.instantiate(&ctor_scheme);
-                let TypeKind::Function(arg_ty, variant_ty) = &ctor_ty.ty else {
-                    return Err(TypeError::InvalidConstructorType(span));
-                };
 
-                let typed_pat = self.infer_pattern(*pat, new_env)?;
-                self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
+                match (&ctor_ty.ty, pat) {
+                    (TypeKind::Function(arg_ty, variant_ty), Some(pat)) => {
+                        let typed_pat = self.infer_pattern(*pat, new_env)?;
+                        self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
 
-                Ok(TypedPattern {
-                    kind: TypedPatternKind::Constructor(variant_id, ctor_id, Box::new(typed_pat)),
-                    ty: variant_ty.clone(),
-                    span,
-                })
+                        Ok(TypedPattern {
+                            kind: TypedPatternKind::Constructor(variant_id, ctor_id, Some(Box::new(typed_pat))),
+                            ty: variant_ty.clone(),
+                            span,
+                        })
+                    }
+                    (TypeKind::Function(_, _), None) => {
+                        // Constructor expects an argument but none provided
+                        Err(TypeError::InvalidConstructorType(span))
+                    }
+                    (_, Some(_)) => {
+                        // Constructor doesn't expect an argument but one was provided
+                        Err(TypeError::InvalidConstructorType(span))
+                    }
+                    (_, None) => {
+                        // Nullary constructor - the constructor type IS the variant type
+                        Ok(TypedPattern {
+                            kind: TypedPatternKind::Constructor(variant_id, ctor_id, None),
+                            ty: ctor_ty,
+                            span,
+                        })
+                    }
+                }
             }
         }
     }
@@ -1147,8 +1175,13 @@ impl Inferrer {
                     return Err(TypeError::ConstructorNotFound(variant_id, ctor_id, span));
                 };
                 let ty = self.instantiate(&ctor);
+                let nullary = !matches!(&ty.ty, TypeKind::Function(_, _));
                 Ok(Typed {
-                    kind: TypedKind::Constructor(variant_id, ctor_id),
+                    kind: TypedKind::Constructor {
+                        variant: variant_id,
+                        ctor: ctor_id,
+                        nullary,
+                    },
                     ty,
                     span,
                 })
@@ -1439,7 +1472,9 @@ impl Inferrer {
                 }
             }
             TypedPatternKind::Constructor(_, _, p) => {
-                self.resolve_types_in_pattern(p);
+                if let Some(p) = p {
+                    self.resolve_types_in_pattern(p);
+                }
             }
             _ => {}
         }

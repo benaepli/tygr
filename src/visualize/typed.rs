@@ -169,9 +169,11 @@ impl<'a> TypedAstVisualizer<'a> {
                     "Constructor {}::{} : {}",
                     type_str, ctor_str, ty_str
                 ));
-                self.indent += 1;
-                self.visit_pattern(inner);
-                self.indent -= 1;
+                if let Some(inner) = inner {
+                    self.indent += 1;
+                    self.visit_pattern(inner);
+                    self.indent -= 1;
+                }
             }
         }
     }
@@ -359,12 +361,17 @@ impl<'a> TypedAstVisualizer<'a> {
             TypedKind::Builtin(builtin) => {
                 self.write_line(&format!("Builtin({:?}) : {}", builtin, ty_str));
             }
-            TypedKind::Constructor(type_name, ctor_name) => {
-                let type_str = self.name_table.lookup_type_name(type_name);
-                let ctor_str = self.name_table.lookup_name(ctor_name);
+            TypedKind::Constructor {
+                variant,
+                ctor,
+                nullary,
+            } => {
+                let type_str = self.name_table.lookup_type_name(variant);
+                let ctor_str = self.name_table.lookup_name(ctor);
+                let nullary_str = if *nullary { " (nullary)" } else { "" };
                 self.write_line(&format!(
-                    "Constructor {}::{} : {}",
-                    type_str, ctor_str, ty_str
+                    "Constructor {}::{}{} : {}",
+                    type_str, ctor_str, nullary_str, ty_str
                 ));
             }
         }

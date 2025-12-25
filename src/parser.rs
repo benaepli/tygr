@@ -22,7 +22,7 @@ pub enum PatternKind {
     Cons(Box<Pattern>, Box<Pattern>),
     EmptyList,
     Record(Vec<(String, Pattern)>),
-    Constructor(String, Box<Pattern>),
+    Constructor(String, Option<Box<Pattern>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +74,7 @@ pub struct TypeAlias {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constructor {
-    pub annotation: Annotation,
+    pub annotation: Option<Annotation>,
     pub span: Span,
 }
 
@@ -230,8 +230,19 @@ where
         let ident_pat = ident()
             .then(tuple_pat.clone().or_not())
             .map_with(|(name, arg_opt), e| match arg_opt {
-                Some(arg) => Pattern::new(PatternKind::Constructor(name, Box::new(arg)), e.span()),
-                None => Pattern::new(PatternKind::Var(name), e.span()),
+                Some(arg) => Pattern::new(
+                    PatternKind::Constructor(name, Some(Box::new(arg))),
+                    e.span(),
+                ),
+                None => {
+                    let is_capitalized = name.chars().next().map_or(false, |c| c.is_uppercase());
+
+                    if is_capitalized {
+                        Pattern::new(PatternKind::Constructor(name, None), e.span())
+                    } else {
+                        Pattern::new(PatternKind::Var(name), e.span())
+                    }
+                }
             });
 
         let record_field = ident()
@@ -790,13 +801,10 @@ where
                 .or_not(),
         )
         .map_with(|(name, annot_opt), extra| {
-            let annotation = annot_opt.unwrap_or_else(|| {
-                Annotation::new(AnnotationKind::Var("unit".to_string()), extra.span())
-            });
             (
                 name,
                 Constructor {
-                    annotation,
+                    annotation: annot_opt,
                     span: extra.span(),
                 },
             )

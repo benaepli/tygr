@@ -29,7 +29,7 @@ impl fmt::Display for TypeName {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedConstructor {
-    pub annotation: ResolvedAnnotation,
+    pub annotation: Option<ResolvedAnnotation>,
     pub span: Span,
 }
 
@@ -59,7 +59,7 @@ pub enum ResolvedPatternKind {
     Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     EmptyList,
     Record(HashMap<String, ResolvedPattern>),
-    Constructor(TypeName, Name, Box<ResolvedPattern>),
+    Constructor(TypeName, Name, Option<Box<ResolvedPattern>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -540,12 +540,14 @@ impl Resolver {
 
             let name_id = self.new_name();
             self.name_origins.insert(name_id, name.clone());
+            let resolved_annotation = match constructor.annotation {
+                Some(annot) => Some(self.resolve_annotation(annot)?.finalize(variant.span)?),
+                None => None,
+            };
             constructors.insert(
                 name_id,
                 ResolvedConstructor {
-                    annotation: self
-                        .resolve_annotation(constructor.annotation)?
-                        .finalize(variant.span)?,
+                    annotation: resolved_annotation,
                     span: constructor.span,
                 },
             );
@@ -722,9 +724,12 @@ impl Resolver {
                 let Some((variant_id, ctor_id)) = self.constructors.get(&name).cloned() else {
                     return Err(ResolutionError::ConstructorNotFound(name, span));
                 };
-                let resolved = self.analyze_pattern(*pat, scope)?;
+                let resolved = match pat {
+                    Some(p) => Some(Box::new(self.analyze_pattern(*p, scope)?)),
+                    None => None,
+                };
                 Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Constructor(variant_id, ctor_id, Box::new(resolved)),
+                    ResolvedPatternKind::Constructor(variant_id, ctor_id, resolved),
                     span,
                 ))
             }

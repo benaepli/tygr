@@ -83,7 +83,7 @@ pub enum PatternKind {
     Cons(Box<Pattern>, Box<Pattern>),
     EmptyList,
     Record(BTreeMap<String, Pattern>),
-    Constructor(TypeName, Name, Box<Pattern>),
+    Constructor(TypeName, Name, Option<Box<Pattern>>),
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +122,11 @@ pub enum ExprKind {
     FieldAccess(Box<Expr>, String),
 
     Builtin(BuiltinFn),
-    Constructor(TypeName, Name),
+    Constructor {
+        variant: TypeName,
+        ctor: Name,
+        nullary: bool,
+    },
 }
 
 fn collect_free_type_vars(ty: &Type, set: &mut BTreeSet<TypeID>) {
@@ -263,7 +267,7 @@ impl Converter {
                 PatternKind::Record(new_fields)
             }
             TypedPatternKind::Constructor(tn, n, p) => {
-                PatternKind::Constructor(tn, n, Box::new(self.convert_pattern(*p)))
+                PatternKind::Constructor(tn, n, p.map(|p| Box::new(self.convert_pattern(*p))))
             }
         };
         Pattern { kind, ty }
@@ -283,7 +287,9 @@ impl Converter {
                 self.populate_scope_from_pattern_locals(p2, scope);
             }
             TypedPatternKind::Constructor(_, _, p) => {
-                self.populate_scope_from_pattern_locals(p, scope)
+                if let Some(p) = p {
+                    self.populate_scope_from_pattern_locals(p, scope)
+                }
             }
             TypedPatternKind::Record(fields) => {
                 for p in fields.values() {
@@ -518,8 +524,16 @@ impl Converter {
                 kind: ExprKind::Builtin(b),
                 ty,
             },
-            TypedKind::Constructor(tn, n) => Expr {
-                kind: ExprKind::Constructor(tn, n),
+            TypedKind::Constructor {
+                variant,
+                ctor,
+                nullary,
+            } => Expr {
+                kind: ExprKind::Constructor {
+                    variant,
+                    ctor,
+                    nullary,
+                },
                 ty,
             },
             TypedKind::RecordLit(fields) => {

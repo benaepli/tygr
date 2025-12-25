@@ -47,10 +47,13 @@ pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
                 .collect();
             ExprKind::RecordLit(expr_fields)
         }
-        PatternKind::Constructor(name, e) => ExprKind::App(
-            Box::new(Expr::new(ExprKind::Var(name.clone()), pattern.span)),
-            Box::new(pattern_to_expr(e)),
-        ),
+        PatternKind::Constructor(name, e) => match e {
+            Some(inner) => ExprKind::App(
+                Box::new(Expr::new(ExprKind::Var(name.clone()), pattern.span)),
+                Box::new(pattern_to_expr(inner)),
+            ),
+            None => ExprKind::Var(name.clone()),
+        },
     };
     Expr {
         kind,

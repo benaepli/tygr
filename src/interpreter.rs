@@ -339,7 +339,10 @@ fn bind_pattern(
                 && variant == variant_id
             {
                 if ctor == ctor_id {
-                    bind_pattern(pat, v.clone(), env)
+                    match pat {
+                        Some(p) => bind_pattern(p, v.clone(), env),
+                        None => Ok(()), // Nullary constructor, nothing to bind
+                    }
                 } else {
                     Err(EvalError::PatternMismatch(format!(
                         "expected constructor {}, found constructor {}",
@@ -731,8 +734,16 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
                 ))),
             }
         }
-        &TypedKind::Constructor(variant_id, ctor_id) => {
-            Ok(Rc::new(Value::Constructor(variant_id, ctor_id)))
+        TypedKind::Constructor {
+            variant,
+            ctor,
+            nullary,
+        } => {
+            if *nullary {
+                Ok(Rc::new(Value::Variant(Rc::new(Value::Unit), *variant, *ctor)))
+            } else {
+                Ok(Rc::new(Value::Constructor(*variant, *ctor)))
+            }
         }
 
         TypedKind::RecRecord(fields) => {
