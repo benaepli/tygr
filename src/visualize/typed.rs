@@ -32,7 +32,11 @@ impl<'a> TypedAstVisualizer<'a> {
         if scheme.vars.is_empty() {
             self.type_str(&scheme.ty)
         } else {
-            let vars: Vec<String> = scheme.vars.iter().map(|(id, _)| format!("{}", id)).collect();
+            let vars: Vec<String> = scheme
+                .vars
+                .iter()
+                .map(|(id, _)| format!("{}", id))
+                .collect();
             format!("forall {}. {}", vars.join(" "), self.type_str(&scheme.ty))
         }
     }
