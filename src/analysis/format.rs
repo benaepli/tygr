@@ -1,3 +1,4 @@
+use crate::analysis::InitialAnalysisError;
 use crate::analysis::inference::{TypeDisplay, TypeError};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::ResolutionError;
@@ -199,6 +200,37 @@ pub fn report_type_errors(
                 ])
                 .with_notes(vec![
                     "kinds must match when unifying types".to_string(),
+                ]),
+        };
+
+        term::emit_to_write_style(writer, &config, &files, &diagnostic)?;
+    }
+
+    Ok(())
+}
+
+pub fn report_initial_analysis_errors(
+    writer: &mut impl WriteStyle,
+    source: &str,
+    errors: &[InitialAnalysisError],
+    filename: &str,
+) -> Result<(), codespan_reporting::files::Error> {
+    let mut files = SimpleFiles::new();
+    let file_id = files.add(filename, source);
+
+    let config = term::Config::default();
+
+    for error in errors {
+        let diagnostic = match error {
+            InitialAnalysisError::NonStaticDefinition(name, span) => Diagnostic::error()
+                .with_message(format!("definition `{}` has non-static initializer", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("this expression is not static"),
+                ])
+                .with_notes(vec![
+                    "definitions must have static initializers (literals, lambdas, or variables)".to_string(),
+                    "expressions involving function application, conditionals, or pattern matching are not allowed".to_string(),
                 ]),
         };
 

@@ -1,8 +1,8 @@
 type mylist = list
 
-let fold_right = rec self, f, ls, x => match ls with
+let rec fold_right f, ls, x => match ls with
     | [] => x
-    | hd::tl => f hd (self f tl x)
+    | hd::tl => f hd (fold_right f tl x)
 
 let result_b = fold_right (fn x, acc => if x then acc else !acc) (true::false::[]) true
 

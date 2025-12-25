@@ -393,6 +393,8 @@ where
     just(TokenKind::Let)
         .ignore_then(just(TokenKind::Rec).or_not())
         .then(pattern())
+        .then(generics())
+        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then(
             param()
                 .then(
@@ -408,12 +410,10 @@ where
                 })
                 .or_not(),
         )
-        .then(generics())
-        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then_ignore(just(TokenKind::Equal))
         .then(expr_parser)
         .map_with(
-            |(((((rec_token, pat), params_opt), generics), annot), val), e| {
+            |(((((rec_token, pat), generics), annot), params_opt), val), e| {
                 let span = e.span();
                 let mut value_expr = if let Some(params) = params_opt {
                     let mut iter = params.into_iter().rev();
@@ -850,6 +850,8 @@ where
 {
     just(TokenKind::Def)
         .ignore_then(ident())
+        .then(generics())
+        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then(
             param()
                 .then(
@@ -865,11 +867,9 @@ where
                 })
                 .or_not(),
         )
-        .then(generics())
-        .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then_ignore(just(TokenKind::Equal))
         .then(expr_parser)
-        .map_with(|((((name, params_opt), generics), annot), val), e| {
+        .map_with(|((((name, generics), annot), params_opt), val), e| {
             let span = e.span();
             let value_expr = if let Some(params) = params_opt {
                 let mut iter = params.into_iter().rev();

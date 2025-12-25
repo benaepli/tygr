@@ -7,7 +7,7 @@ use std::rc::Rc;
 pub enum MainFunctionError {
     #[error("main function not found")]
     NotFound,
-    #[error("main function has wrong type: expected Unit -> Unit, found {0}")]
+    #[error("main function has wrong arg: expected unit -> <some type>, found {0}")]
     WrongType(String),
 }
 
@@ -35,10 +35,10 @@ pub fn find_and_verify_main(
     }
 
     let def = main_def.ok_or(MainFunctionError::NotFound)?;
-    if let TypeKind::Function(arg, ret) = &def.ty.as_ref().ty {
+    if let TypeKind::Function(arg, _arg) = &def.ty.as_ref().ty {
         let is_unit = |t: &Rc<crate::analysis::inference::Type>| matches!(t.as_ref().ty, TypeKind::Con(id) if id == crate::builtin::UNIT_TYPE);
 
-        if is_unit(arg) && is_unit(ret) {
+        if is_unit(arg) {
             return Ok(def.name.0);
         }
     }

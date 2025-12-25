@@ -1359,6 +1359,12 @@ impl Inferrer {
                     ty: func_ty.clone(),
                 },
             );
+
+            if let Some(annot) = &def.annotation {
+                let expected = self.instantiate_annotation(annot)?;
+                self.unify(&func_ty, &expected, def.span)?;
+            }
+
             temp_types.insert(def.name.0, func_ty);
         }
 
@@ -1370,12 +1376,6 @@ impl Inferrer {
 
             let typed_expr = self.infer_type(&rec_env, *def.expr)?;
             let placeholder_ty = temp_types.get(&name.0).unwrap();
-
-            if let Some(annot) = &def.annotation {
-                let expected = self.instantiate_annotation(annot)?;
-                self.unify(&typed_expr.ty, &expected, span)?;
-                self.unify(placeholder_ty, &expected, span)?;
-            }
 
             self.unify(placeholder_ty, &typed_expr.ty, span)?;
 

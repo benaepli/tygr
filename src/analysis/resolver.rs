@@ -1123,4 +1123,12 @@ impl Resolver {
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
         crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.type_name_origins)
     }
+
+    pub fn next_name_id(&self) -> Name {
+        self.next_id
+    }
+
+    pub fn next_type_name_id(&self) -> TypeName {
+        self.next_type
+    }
 }

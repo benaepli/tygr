@@ -46,7 +46,7 @@ cargo build --release
 You can interpret Tygr source files directly using `cargo run`.
 
 ```bash
-cargo run -- examples/reduce.tygr
+cargo run -- examples/scripts/reduce.tygr
 ```
 
 Running without any input arguments will launch a REPL:
@@ -62,10 +62,11 @@ directory.
 
 Here are a couple:
 
-* [examples/reduce.tygr](examples/reduce.tygr): Demonstrates list processing (`fold_left`/`fold_right`) and recursion.
-* [examples/mutual.tygr](examples/mutual.tygr): Demonstrates mutual recursion using
+* [examples/scripts/reduce.tygr](examples/scripts/reduce.tygr): Demonstrates list processing (`fold_left`/`fold_right`)
+  and recursion.
+* [examples/scripts/mutual.tygr](examples/scripts/mutual.tygr): Demonstrates mutual recursion using
   recursive records.
-* [examples/calculator.tygr](examples/calculator.tygr): A simple calculator using recursive variants.
+* [examples/scripts/calculator.tygr](examples/scripts/calculator.tygr): A simple calculator using recursive variants.
 
 ## Documentation
 

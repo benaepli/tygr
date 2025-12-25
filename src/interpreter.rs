@@ -671,8 +671,8 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
         }
         TypedKind::Match(expr, branches) => {
             let val = eval(expr, env, custom_fns)?;
-            let mut new_env = env.clone();
             for branch in branches {
+                let mut new_env = env.clone();
                 let result = bind_pattern(&branch.pattern, val.clone(), &mut new_env);
                 if result.is_err() {
                     continue;
