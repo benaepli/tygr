@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct Name(pub usize);
 
 impl fmt::Display for Name {
@@ -172,6 +174,38 @@ pub enum ResolvedKind {
 
     Builtin(BuiltinFn),
     Constructor(TypeName, Name),
+}
+
+impl ResolvedKind {
+    pub fn is_syntactic_value(&self) -> bool {
+        match self {
+            ResolvedKind::Var(_)
+            | ResolvedKind::Lambda { .. }
+            | ResolvedKind::IntLit(_)
+            | ResolvedKind::FloatLit(_)
+            | ResolvedKind::BoolLit(_)
+            | ResolvedKind::StringLit(_)
+            | ResolvedKind::UnitLit
+            | ResolvedKind::EmptyListLit
+            | ResolvedKind::Constructor(_, _) => true,
+
+            ResolvedKind::PairLit(a, b) => {
+                a.kind.is_syntactic_value() && b.kind.is_syntactic_value()
+            }
+            ResolvedKind::Cons(h, t) => h.kind.is_syntactic_value() && t.kind.is_syntactic_value(),
+            ResolvedKind::RecordLit(fields) => fields.values().all(|v| v.kind.is_syntactic_value()),
+
+            ResolvedKind::App(_, _)
+            | ResolvedKind::Let { .. }
+            | ResolvedKind::If(_, _, _)
+            | ResolvedKind::Match(_, _)
+            | ResolvedKind::Block(_, _)
+            | ResolvedKind::BinOp(_, _, _)
+            | ResolvedKind::Builtin(_)
+            | ResolvedKind::FieldAccess(_, _) => false,
+            ResolvedKind::RecRecord(_) => true,
+        }
+    }
 }
 
 #[derive(Error, Debug, PartialEq, Clone)]

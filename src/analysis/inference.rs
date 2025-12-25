@@ -219,7 +219,7 @@ pub enum TypedKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedVariant {
+struct TypedVariant {
     pub schemes: HashMap<Name, TypeScheme>,
     pub ty: Rc<Type>,
 }
@@ -933,6 +933,7 @@ impl Inferrer {
                 value_type,
                 type_params,
             } => {
+                let is_value = value.kind.is_syntactic_value();
                 for param_id in type_params {
                     let ty = Type::new(self.new_type(), self.new_kind());
                     self.type_ctx.insert(param_id, ty);
@@ -951,7 +952,14 @@ impl Inferrer {
 
                 let mut extended_env = env.clone();
                 for (name, scheme) in new_env {
-                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
+                    let s = if is_value {
+                        self.generalize(env, &self.apply_subst(&scheme.ty))
+                    } else {
+                        TypeScheme {
+                            vars: vec![],
+                            ty: self.apply_subst(&scheme.ty),
+                        }
+                    };
                     extended_env.insert(name, s);
                 }
 
@@ -1215,6 +1223,7 @@ impl Inferrer {
                             value_type,
                             type_params,
                         } => {
+                            let is_value = value.kind.is_syntactic_value();
                             for param_id in type_params {
                                 let ty = Type::new(self.new_type(), self.new_kind());
                                 self.type_ctx.insert(param_id, ty);
@@ -1234,7 +1243,14 @@ impl Inferrer {
                             self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
 
                             for (name, scheme) in new_env {
-                                let s = self.generalize(&env, &self.apply_subst(&scheme.ty));
+                                let s = if is_value {
+                                    self.generalize(&env, &self.apply_subst(&scheme.ty))
+                                } else {
+                                    TypeScheme {
+                                        vars: vec![],
+                                        ty: self.apply_subst(&scheme.ty),
+                                    }
+                                };
                                 env.insert(name, s);
                             }
 
@@ -1289,6 +1305,7 @@ impl Inferrer {
                 value_type,
                 type_params,
             } => {
+                let is_value = value.kind.is_syntactic_value();
                 for param_id in type_params {
                     let ty = Type::new(self.new_type(), self.new_kind());
                     self.type_ctx.insert(param_id, ty);
@@ -1309,7 +1326,14 @@ impl Inferrer {
                 self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
 
                 for (name, scheme) in new_pattern_bindings {
-                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
+                    let s = if is_value {
+                        self.generalize(env, &self.apply_subst(&scheme.ty))
+                    } else {
+                        TypeScheme {
+                            vars: vec![],
+                            ty: self.apply_subst(&scheme.ty),
+                        }
+                    };
                     env.insert(name, s);
                 }
 

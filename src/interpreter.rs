@@ -174,6 +174,8 @@ pub enum EvalError {
     TypeMismatch(String),
     NotAFunction,
     NonExhaustiveMatch,
+    CustomFunctionNotFound(CustomFnId),
+    IOError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -184,6 +186,8 @@ impl fmt::Display for EvalError {
             EvalError::TypeMismatch(msg) => write!(f, "Type mismatch: {}", msg),
             EvalError::NotAFunction => write!(f, "Attempted to call a non-function value"),
             EvalError::NonExhaustiveMatch => write!(f, "Non-exhaustive match"),
+            EvalError::CustomFunctionNotFound(id) => write!(f, "Custom function {} not found", id),
+            EvalError::IOError(msg) => write!(f, "IO error: {}", msg),
         }
     }
 }
@@ -530,11 +534,8 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>], env: &mut Environment) -> Eva
         Print => {
             let s = as_string!(&args[0]);
             let mut out = env.output.borrow_mut();
-            if let Err(_) = writeln!(out, "{}", s) {
-                // In a robust system we might want to return an IO error,
-                // but for now we'll just ignore it or log it?
-                // Alternatively, return EvalError.
-            }
+            writeln!(out, "{}", s)
+                .map_err(|e| EvalError::IOError(format!("Failed to write to output: {}", e)))?;
             Ok(Rc::new(Value::String(s)))
         }
         StringOfFloat => Ok(Rc::new(Value::String(Rc::new(
@@ -601,7 +602,7 @@ fn apply(
         Value::Custom(id) => {
             let custom_fn = custom_fns
                 .get(*id)
-                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+                .ok_or(EvalError::CustomFunctionNotFound(*id))?;
             let arity = custom_fn.arity();
             if arity == 1 {
                 custom_fn.call(&[arg], env)
@@ -615,7 +616,7 @@ fn apply(
         Value::PartialCustom { id, args } => {
             let custom_fn = custom_fns
                 .get(*id)
-                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+                .ok_or(EvalError::CustomFunctionNotFound(*id))?;
             let arity = custom_fn.arity();
             let mut new_args = args.clone();
             new_args.push(arg);
