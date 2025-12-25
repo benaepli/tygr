@@ -1,19 +1,19 @@
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
-use crate::analysis::resolver::{Resolver, ResolutionError};
+use crate::analysis::resolver::{ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
-use crate::interpreter::{eval_statement, Value, ValueDisplay};
+use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
-use crate::parser::{make_input, ReplStatement};
+use crate::parser::{ReplStatement, make_input};
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
 use codespan_reporting::term::termcolor::{Color, ColorSpec, WriteColor};
 use colored::Colorize;
 #[cfg(feature = "cli")]
-use rustyline::error::ReadlineError;
-#[cfg(feature = "cli")]
 use rustyline::DefaultEditor;
+#[cfg(feature = "cli")]
+use rustyline::error::ReadlineError;
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -51,19 +51,18 @@ impl Repl {
             custom_fns: CustomFnRegistry::new(),
         }
     }
-    
+
     pub fn register_custom_fn(&mut self, func: impl CustomFn) -> Result<(), ReplError> {
         let name_str = func.name().to_string();
         let scheme = func.type_scheme();
         let func = Rc::new(func);
 
-        let name_id = self
-            .resolver
-            .register_custom(&name_str)
-            .map_err(|source| ReplError::CustomFunctionRegistration {
+        let name_id = self.resolver.register_custom(&name_str).map_err(|source| {
+            ReplError::CustomFunctionRegistration {
                 name: name_str.clone(),
                 source,
-            })?;
+            }
+        })?;
 
         self.inferrer.register_custom_type(name_id, scheme.clone());
         self.type_env.insert(name_id, scheme);

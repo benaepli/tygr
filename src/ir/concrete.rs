@@ -61,17 +61,9 @@ pub struct ConcreteDefinition {
 }
 
 #[derive(Debug, Clone)]
-pub enum ConcreteStatementKind {
-    Let {
-        pattern: ConcretePattern,
-        value: Box<ConcreteTyped>,
-    },
-    Expr(Box<ConcreteTyped>),
-}
-
-#[derive(Debug, Clone)]
 pub struct ConcreteStatement {
-    pub kind: ConcreteStatementKind,
+    pub pattern: ConcretePattern,
+    pub value: Box<ConcreteTyped>,
     pub ty: Rc<ConcreteType>,
     pub span: Span,
 }
@@ -92,11 +84,6 @@ pub enum ConcreteTypedKind {
         captures: HashSet<Name>,
     },
     App(Box<ConcreteTyped>, Box<ConcreteTyped>),
-    Let {
-        name: ConcretePattern,
-        value: Box<ConcreteTyped>,
-        body: Box<ConcreteTyped>,
-    },
     If(Box<ConcreteTyped>, Box<ConcreteTyped>, Box<ConcreteTyped>),
     Match(Box<ConcreteTyped>, Vec<ConcreteMatchPattern>),
     Block(Vec<ConcreteStatement>, Option<Box<ConcreteTyped>>),

@@ -1,7 +1,7 @@
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, BinOp, Definition, Expr, ExprKind, Pattern, PatternKind, Span,
-    Statement, StatementKind, TypeAlias, Variant,
+    Annotation, AnnotationKind, BinOp, Definition, Expr, ExprKind, Generic, Pattern, PatternKind,
+    Span, Statement, StatementKind, TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -115,26 +115,12 @@ impl ResolvedAnnotation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ResolvedStatementKind {
-    Let {
-        pattern: ResolvedPattern,
-        value: Box<Resolved>,
-        value_type: Option<ResolvedAnnotation>,
-        type_params: Vec<TypeName>,
-    },
-    Expr(Box<Resolved>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedStatement {
-    pub kind: ResolvedStatementKind,
+    pub pattern: ResolvedPattern,
+    pub value: Box<Resolved>,
+    pub value_type: Option<ResolvedAnnotation>,
+    pub type_params: Vec<TypeName>,
     pub span: Span,
-}
-
-impl ResolvedStatement {
-    fn new(kind: ResolvedStatementKind, span: Span) -> Self {
-        ResolvedStatement { kind, span }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,13 +133,6 @@ pub enum ResolvedKind {
         param_type: Option<ResolvedAnnotation>,
     },
     App(Box<Resolved>, Box<Resolved>),
-    Let {
-        pattern: ResolvedPattern,
-        value: Box<Resolved>,
-        body: Box<Resolved>,
-        value_type: Option<ResolvedAnnotation>,
-        type_params: Vec<TypeName>,
-    },
     If(Box<Resolved>, Box<Resolved>, Box<Resolved>),
     Match(Box<Resolved>, Vec<ResolvedMatchBranch>),
     Block(Vec<ResolvedStatement>, Option<Box<Resolved>>),
@@ -196,7 +175,6 @@ impl ResolvedKind {
             ResolvedKind::RecordLit(fields) => fields.values().all(|v| v.kind.is_syntactic_value()),
 
             ResolvedKind::App(_, _)
-            | ResolvedKind::Let { .. }
             | ResolvedKind::If(_, _, _)
             | ResolvedKind::Match(_, _)
             | ResolvedKind::Block(_, _)
@@ -669,24 +647,41 @@ impl Resolver {
                     self.scopes[scope_idx].insert(name, id);
                 }
                 self.type_scopes.pop();
-                Ok(ResolvedStatement::new(
-                    ResolvedStatementKind::Let {
-                        pattern: resolved_pattern,
-                        value: Box::new(resolved_value),
-                        value_type: resolved_annot,
-                        type_params: resolved_generics,
-                    },
+                Ok(ResolvedStatement {
+                    pattern: resolved_pattern,
+                    value: Box::new(resolved_value),
+                    value_type: resolved_annot,
+                    type_params: resolved_generics,
                     span,
-                ))
+                })
             }
             StatementKind::Expr(expr) => {
                 let (resolved_expr, _free_in_expr) = self.analyze(*expr)?;
-                Ok(ResolvedStatement::new(
-                    ResolvedStatementKind::Expr(Box::new(resolved_expr)),
+                Ok(ResolvedStatement {
+                    pattern: ResolvedPattern::new(ResolvedPatternKind::Wildcard, span),
+                    value: Box::new(resolved_expr),
+                    value_type: None,
+                    type_params: vec![],
                     span,
-                ))
+                })
             }
         }
+    }
+
+    fn desugar_let_to_block(
+        &self,
+        pattern: Pattern,
+        value: Box<Expr>,
+        body: Box<Expr>,
+        generics: Vec<Generic>,
+        annot: Option<Annotation>,
+        span: Span,
+    ) -> Expr {
+        let stmt = Statement {
+            kind: StatementKind::Let(pattern, value, generics, annot),
+            span,
+        };
+        Expr::new(ExprKind::Block(vec![stmt], Some(body)), span)
     }
 
     fn analyze_pattern(
@@ -747,6 +742,75 @@ impl Resolver {
                 Ok(ResolvedPattern::new(
                     ResolvedPatternKind::Record(resolved),
                     span,
+                ))
+            }
+        }
+    }
+
+    fn resolve_local_statement(
+        &mut self,
+        stmt: Statement,
+    ) -> Result<(ResolvedStatement, HashSet<Name>), ResolutionError> {
+        let span = stmt.span;
+        match stmt.kind {
+            StatementKind::Let(pattern, value, generics, annot) => {
+                let mut new_type_scope = HashMap::new();
+                let mut resolved_generics = Vec::new();
+
+                for generic in generics {
+                    let id = self.new_id();
+                    new_type_scope.insert(generic.name.clone(), id);
+                    resolved_generics.push(id);
+                }
+                self.type_scopes.push(new_type_scope);
+
+                let resolved_annot = if let Some(a) = annot {
+                    let a_span = a.span;
+                    Some(self.resolve_annotation(a)?.finalize(a_span)?)
+                } else {
+                    None
+                };
+
+                let (resolved_value, free_in_value) = self.analyze(*value)?;
+                let mut pattern_scope = HashMap::new();
+                let resolved_pattern = self.analyze_pattern(pattern, &mut pattern_scope)?;
+
+                let current_scope = self
+                    .scopes
+                    .last_mut()
+                    .expect("No scope to bind variable into");
+                for (name, id) in pattern_scope {
+                    if current_scope.insert(name.clone(), id).is_some() {
+                        return Err(ResolutionError::DuplicateBinding(name, span));
+                    }
+                }
+
+                self.type_scopes.pop();
+
+                Ok((
+                    ResolvedStatement {
+                        pattern: resolved_pattern,
+                        value: Box::new(resolved_value),
+                        value_type: resolved_annot,
+                        type_params: resolved_generics,
+                        span,
+                    },
+                    free_in_value,
+                ))
+            }
+
+            StatementKind::Expr(expr) => {
+                let (resolved_expr, free_in_expr) = self.analyze(*expr)?;
+
+                Ok((
+                    ResolvedStatement {
+                        pattern: ResolvedPattern::new(ResolvedPatternKind::Wildcard, span),
+                        value: Box::new(resolved_expr),
+                        value_type: None,
+                        type_params: vec![],
+                        span,
+                    },
+                    free_in_expr,
                 ))
             }
         }
@@ -913,50 +977,9 @@ impl Resolver {
             }
 
             ExprKind::Let(pattern, value, body, generics, annot) => {
-                let mut new_type_scope = HashMap::new();
-                let mut resolved_generics = Vec::new();
-                for generic in generics {
-                    let id = self.new_id();
-                    new_type_scope.insert(generic.name.clone(), id);
-                    resolved_generics.push(id);
-                }
-                self.type_scopes.push(new_type_scope);
-                let resolved_annot = if let Some(a) = annot {
-                    let span = a.span;
-                    Some(self.resolve_annotation(a)?.finalize(span)?)
-                } else {
-                    None
-                };
-
-                let (resolved_value, free_in_value) = self.analyze(*value)?;
-
-                let mut new_scope = HashMap::new();
-                let resolved = self.analyze_pattern(pattern, &mut new_scope)?;
-
-                self.scopes.push(new_scope.clone());
-                let (resolved_body, mut free_in_body) = self.analyze(*body)?;
-                self.scopes.pop();
-
-                for name_id in new_scope.values() {
-                    free_in_body.remove(name_id);
-                }
-
-                let all_free = free_in_value.union(&free_in_body).cloned().collect();
-
-                self.type_scopes.pop();
-                Ok((
-                    Resolved::new(
-                        ResolvedKind::Let {
-                            pattern: resolved,
-                            value: Box::new(resolved_value),
-                            body: Box::new(resolved_body),
-                            value_type: resolved_annot,
-                            type_params: resolved_generics,
-                        },
-                        span,
-                    ),
-                    all_free,
-                ))
+                let block_expr =
+                    self.desugar_let_to_block(pattern, value, body, generics, annot, span);
+                self.analyze(block_expr)
             }
 
             ExprKind::Lambda(param_pattern, body, annot) => {
@@ -1055,61 +1078,12 @@ impl Resolver {
                 let mut resolved_statements = Vec::new();
                 let block_scope = HashMap::new();
 
-                self.scopes.push(block_scope.clone());
+                self.scopes.push(block_scope);
 
                 for stmt in statements {
-                    let stmt_span = stmt.span;
-                    match stmt.kind {
-                        StatementKind::Let(pattern, value, generics, annot) => {
-                            let mut new_type_scope = HashMap::new();
-                            let mut resolved_generics = Vec::new();
-                            for generic in generics {
-                                let id = self.new_id();
-                                new_type_scope.insert(generic.name.clone(), id);
-                                resolved_generics.push(id);
-                            }
-                            self.type_scopes.push(new_type_scope);
-
-                            let resolved_annot = if let Some(a) = annot {
-                                let a_span = a.span;
-                                Some(self.resolve_annotation(a)?.finalize(a_span)?)
-                            } else {
-                                None
-                            };
-
-                            let (resolved_value, free_in_value) = self.analyze(*value)?;
-                            all_free.extend(free_in_value);
-
-                            let mut pattern_scope = HashMap::new();
-                            let resolved_pattern =
-                                self.analyze_pattern(pattern, &mut pattern_scope)?;
-
-                            let current_scope = self.scopes.last_mut().unwrap();
-                            for (name, id) in pattern_scope {
-                                current_scope.insert(name, id);
-                            }
-
-                            self.type_scopes.pop();
-
-                            resolved_statements.push(ResolvedStatement::new(
-                                ResolvedStatementKind::Let {
-                                    pattern: resolved_pattern,
-                                    value: Box::new(resolved_value),
-                                    value_type: resolved_annot,
-                                    type_params: resolved_generics,
-                                },
-                                stmt_span,
-                            ));
-                        }
-                        StatementKind::Expr(expr) => {
-                            let (resolved_expr, free_in_expr) = self.analyze(*expr)?;
-                            all_free.extend(free_in_expr);
-                            resolved_statements.push(ResolvedStatement::new(
-                                ResolvedStatementKind::Expr(Box::new(resolved_expr)),
-                                stmt_span,
-                            ));
-                        }
-                    }
+                    let (resolved_stmt, free_in_stmt) = self.resolve_local_statement(stmt)?;
+                    all_free.extend(free_in_stmt);
+                    resolved_statements.push(resolved_stmt);
                 }
 
                 let resolved_tail = if let Some(tail_expr) = tail {

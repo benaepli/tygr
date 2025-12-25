@@ -1,6 +1,5 @@
 use crate::analysis::inference::{
     Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind, TypedStatement,
-    TypedStatementKind,
 };
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
@@ -655,12 +654,6 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
             body: body.clone(),
             env: env.clone(),
         })),
-        TypedKind::Let { name, value, body } => {
-            let val = eval(value, env, custom_fns)?;
-            let mut new_env = env.clone();
-            bind_pattern(name, val, &mut new_env)?;
-            eval(body, &mut new_env, custom_fns)
-        }
         TypedKind::If(cond, then_branch, else_branch) => {
             let cond_val = eval(cond, env, custom_fns)?;
             match &*cond_val {
@@ -770,16 +763,9 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
         TypedKind::Block(statements, tail) => {
             let mut block_env = env.clone();
 
-            for stmt in statements {
-                match &stmt.kind {
-                    TypedStatementKind::Let { pattern, value } => {
-                        let val = eval(value, &mut block_env, custom_fns)?;
-                        bind_pattern(pattern, val, &mut block_env)?;
-                    }
-                    TypedStatementKind::Expr(expr) => {
-                        eval(expr, &mut block_env, custom_fns)?;
-                    }
-                }
+            for TypedStatement { pattern, value, .. } in statements {
+                let val = eval(value, &mut block_env, custom_fns)?;
+                bind_pattern(pattern, val, &mut block_env)?;
             }
 
             match tail {
@@ -802,14 +788,10 @@ pub fn eval_statement(
     stmt: &TypedStatement,
     custom_fns: &CustomFnRegistry,
 ) -> EvalResult {
-    match &stmt.kind {
-        TypedStatementKind::Let { pattern, value } => {
-            let val = eval(value, env, custom_fns)?;
-            bind_pattern(pattern, val.clone(), env)?;
-            Ok(val)
-        }
-        TypedStatementKind::Expr(expr) => eval(expr, env, custom_fns),
-    }
+    let TypedStatement { value, pattern, .. } = stmt;
+    let val = eval(value, env, custom_fns)?;
+    bind_pattern(pattern, val.clone(), env)?;
+    Ok(val)
 }
 
 pub fn eval_groups(
@@ -850,7 +832,6 @@ pub fn run_main(
     let main_val = env
         .get(&main_name)
         .ok_or(EvalError::UndefinedVariable(main_name))?;
-
 
     apply(main_val, Rc::new(Value::Unit), env, custom_fns)
 }
