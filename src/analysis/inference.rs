@@ -25,7 +25,9 @@ pub enum Kind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct KindID(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, PartialOrd, Ord,
+)]
 pub struct TypeID(pub usize);
 
 impl fmt::Display for TypeID {
@@ -156,6 +158,7 @@ pub struct TypedDefinition {
     pub name: (Name, String),
     pub expr: Box<Typed>,
     pub ty: Rc<Type>,
+    pub scheme: TypeScheme,
     pub span: Span,
 }
 
@@ -164,6 +167,7 @@ pub struct TypedStatement {
     pub pattern: TypedPattern,
     pub value: Box<Typed>,
     pub ty: Rc<Type>,
+    pub bindings: Vec<(Name, TypeScheme)>, // Maps names bound in the pattern to a scheme
     pub span: Span,
 }
 
@@ -687,7 +691,10 @@ impl Inferrer {
 
     pub fn infer(&mut self, expr: Resolved) -> Result<Typed, TypeError> {
         let env = Environment::new();
-        self.infer_type(&env, expr)
+        let mut typed_expr = self.infer_type(&env, expr)?;
+        self.resolve_types_in_expr(&mut typed_expr);
+
+        Ok(typed_expr)
     }
 
     fn get_list_constructor(&self) -> Rc<Type> {
@@ -1177,6 +1184,7 @@ impl Inferrer {
 
                     self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
 
+                    let mut bindings = Vec::new();
                     for (name, scheme) in new_env {
                         let s = if is_value {
                             self.generalize(&env, &self.apply_subst(&scheme.ty))
@@ -1186,12 +1194,14 @@ impl Inferrer {
                                 ty: self.apply_subst(&scheme.ty),
                             }
                         };
-                        env.insert(name, s);
+                        env.insert(name, s.clone());
+                        bindings.push((name, s));
                     }
 
                     typed_statements.push(TypedStatement {
                         pattern: typed_pattern,
                         value: Box::new(typed_value),
+                        bindings,
                         ty: value_ty,
                         span: stmt_span,
                     });
@@ -1246,6 +1256,7 @@ impl Inferrer {
 
         self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
 
+        let mut bindings = Vec::new();
         for (name, scheme) in new_pattern_bindings {
             let s = if is_value {
                 self.generalize(env, &self.apply_subst(&scheme.ty))
@@ -1255,15 +1266,20 @@ impl Inferrer {
                     ty: self.apply_subst(&scheme.ty),
                 }
             };
+            bindings.push((name, s.clone()));
             env.insert(name, s);
         }
 
-        Ok(TypedStatement {
+        let mut typed_stmt = TypedStatement {
             pattern: typed_pattern,
             value: Box::new(typed_value),
+            bindings,
             ty: value_ty,
             span,
-        })
+        };
+
+        self.resolve_types_in_statement(&mut typed_stmt);
+        Ok(typed_stmt)
     }
 
     pub fn infer_definitions(
@@ -1291,6 +1307,9 @@ impl Inferrer {
             }
         }
 
+        for group in &mut typed_groups {
+            self.resolve_types_in_group(group);
+        }
         Ok((typed_groups, env))
     }
 
@@ -1306,12 +1325,13 @@ impl Inferrer {
         }
         let final_ty = self.apply_subst(&typed_expr.ty);
         let scheme = self.generalize(env, &final_ty);
-        env.insert(def.name.0, scheme);
+        env.insert(def.name.0, scheme.clone());
 
         Ok(TypedDefinition {
             name: def.name,
             expr: Box::new(typed_expr),
             ty: final_ty,
+            scheme,
             span: def.span,
         })
     }
@@ -1363,6 +1383,10 @@ impl Inferrer {
                 name,
                 expr: Box::new(typed_expr),
                 ty: placeholder_ty.clone(),
+                scheme: TypeScheme {
+                    vars: Vec::new(),
+                    ty: placeholder_ty.clone(),
+                },
                 span,
             });
         }
@@ -1370,10 +1394,107 @@ impl Inferrer {
         for typed_def in &mut typed_defs {
             let final_ty = self.apply_subst(&typed_def.ty);
             typed_def.ty = final_ty.clone();
+
             let scheme = self.generalize(env, &final_ty);
+            typed_def.scheme = scheme.clone();
             env.insert(typed_def.name.0, scheme);
         }
 
         Ok(typed_defs)
+    }
+
+    fn resolve_types_in_group(&self, group: &mut TypedGroup) {
+        match group {
+            TypedGroup::NonRecursive(def) => self.resolve_types_in_definition(def),
+            TypedGroup::Recursive(defs) => {
+                for def in defs {
+                    self.resolve_types_in_definition(def);
+                }
+            }
+        }
+    }
+
+    fn resolve_types_in_definition(&self, def: &mut TypedDefinition) {
+        def.ty = self.apply_subst(&def.ty);
+        self.resolve_types_in_expr(&mut def.expr);
+    }
+
+    fn resolve_types_in_statement(&self, stmt: &mut TypedStatement) {
+        stmt.ty = self.apply_subst(&stmt.ty);
+        self.resolve_types_in_pattern(&mut stmt.pattern);
+        self.resolve_types_in_expr(&mut stmt.value);
+    }
+
+    fn resolve_types_in_pattern(&self, pat: &mut TypedPattern) {
+        pat.ty = self.apply_subst(&pat.ty);
+
+        match &mut pat.kind {
+            TypedPatternKind::Pair(p1, p2) | TypedPatternKind::Cons(p1, p2) => {
+                self.resolve_types_in_pattern(p1);
+                self.resolve_types_in_pattern(p2);
+            }
+            TypedPatternKind::Record(fields) => {
+                for p in fields.values_mut() {
+                    self.resolve_types_in_pattern(p);
+                }
+            }
+            TypedPatternKind::Constructor(_, _, p) => {
+                self.resolve_types_in_pattern(p);
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_types_in_expr(&self, expr: &mut Typed) {
+        expr.ty = self.apply_subst(&expr.ty);
+        match &mut expr.kind {
+            TypedKind::Lambda { param, body, .. } => {
+                self.resolve_types_in_pattern(param);
+                self.resolve_types_in_expr(body);
+            }
+            TypedKind::App(f, a) => {
+                self.resolve_types_in_expr(f);
+                self.resolve_types_in_expr(a);
+            }
+            TypedKind::If(cond, cons, alt) => {
+                self.resolve_types_in_expr(cond);
+                self.resolve_types_in_expr(cons);
+                self.resolve_types_in_expr(alt);
+            }
+            TypedKind::Match(target, branches) => {
+                self.resolve_types_in_expr(target);
+                for branch in branches {
+                    branch.ty = self.apply_subst(&branch.ty);
+                    self.resolve_types_in_pattern(&mut branch.pattern);
+                    self.resolve_types_in_expr(&mut branch.expr);
+                }
+            }
+            TypedKind::Block(stmts, tail) => {
+                for stmt in stmts {
+                    self.resolve_types_in_statement(stmt);
+                }
+                if let Some(tail_expr) = tail {
+                    self.resolve_types_in_expr(tail_expr);
+                }
+            }
+            TypedKind::Cons(h, t) | TypedKind::PairLit(h, t) | TypedKind::BinOp(_, h, t) => {
+                self.resolve_types_in_expr(h);
+                self.resolve_types_in_expr(t);
+            }
+            TypedKind::RecordLit(fields) => {
+                for expr in fields.values_mut() {
+                    self.resolve_types_in_expr(expr);
+                }
+            }
+            TypedKind::RecRecord(fields) => {
+                for (_, expr) in fields.values_mut() {
+                    self.resolve_types_in_expr(expr);
+                }
+            }
+            TypedKind::FieldAccess(expr, _) => {
+                self.resolve_types_in_expr(expr);
+            }
+            _ => {}
+        }
     }
 }

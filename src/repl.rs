@@ -1,11 +1,13 @@
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
+use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
 use crate::parser::{ReplStatement, make_input};
+use crate::visualize::typed::TypedAstVisualizer;
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
 use codespan_reporting::term::termcolor::{Color, ColorSpec, WriteColor};
@@ -27,12 +29,20 @@ pub enum ReplError {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplMode {
+    #[default]
+    Normal,
+    Ast,
+}
+
 pub struct Repl {
     resolver: Resolver,
     inferrer: Inferrer,
     type_env: inference::Environment,
     pub runtime_env: interpreter::Environment,
     custom_fns: CustomFnRegistry,
+    mode: ReplMode,
 }
 
 impl Default for Repl {
@@ -49,7 +59,20 @@ impl Repl {
             type_env: inference::Environment::new(),
             runtime_env: interpreter::Environment::default(),
             custom_fns: CustomFnRegistry::new(),
+            mode: ReplMode::default(),
         }
+    }
+
+    pub fn set_mode(&mut self, mode: ReplMode) {
+        self.mode = mode;
+    }
+
+    pub fn mode(&self) -> ReplMode {
+        self.mode
+    }
+
+    pub fn snapshot_name_table(&self) -> NameTable {
+        self.resolver.snapshot_name_table()
     }
 
     pub fn register_custom_fn(&mut self, func: impl CustomFn) -> Result<(), ReplError> {
@@ -76,13 +99,18 @@ impl Repl {
     #[cfg(feature = "cli")]
     pub fn run(&mut self) {
         println!("{} v{}", "Tygr REPL".bold().cyan(), "0.1.0".dimmed());
-        println!("Type 'exit' or press Ctrl+D to quit.\n");
+        println!("Type 'exit' or press Ctrl+D to quit.");
+        println!("Commands: :ast (toggle AST mode), :mode (show current mode)\n");
 
         let mut rl = DefaultEditor::new().expect("Failed to initialize readline");
         let mut writer = termcolor::StandardStream::stdout(termcolor::ColorChoice::Auto);
 
         loop {
-            let prompt = format!("{} ", "tygr>".bold().magenta());
+            let mode_indicator = match self.mode {
+                ReplMode::Normal => "",
+                ReplMode::Ast => "[ast]",
+            };
+            let prompt = format!("{}{} ", mode_indicator.dimmed(), "tygr>".bold().magenta());
             let readline = rl.readline(&prompt);
 
             match readline {
@@ -93,6 +121,9 @@ impl Repl {
                     }
                     if trimmed == "exit" {
                         break;
+                    }
+                    if self.handle_command(trimmed, &mut writer) {
+                        continue;
                     }
                     let _ = rl.add_history_entry(trimmed);
                     self.process_line(trimmed, &mut writer);
@@ -108,6 +139,66 @@ impl Repl {
                     eprintln!("{}: {:?}", "Error".red().bold(), err);
                     break;
                 }
+            }
+        }
+    }
+
+    fn handle_command(&mut self, input: &str, writer: &mut impl WriteColor) -> bool {
+        if !input.starts_with(':') {
+            return false;
+        }
+
+        match input {
+            ":ast" => {
+                self.mode = match self.mode {
+                    ReplMode::Normal => {
+                        let _ = writeln!(
+                            writer,
+                            "  {} AST visualization mode",
+                            "Enabled".green().bold()
+                        );
+                        ReplMode::Ast
+                    }
+                    ReplMode::Ast => {
+                        let _ = writeln!(
+                            writer,
+                            "  {} AST visualization mode",
+                            "Disabled".yellow().bold()
+                        );
+                        ReplMode::Normal
+                    }
+                };
+                true
+            }
+            ":mode" => {
+                let mode_str = match self.mode {
+                    ReplMode::Normal => "Normal",
+                    ReplMode::Ast => "AST",
+                };
+                let _ = writeln!(writer, "  Current mode: {}", mode_str.cyan());
+                true
+            }
+            ":help" => {
+                let _ = writeln!(writer, "  {}", "Available commands:".bold());
+                let _ = writeln!(
+                    writer,
+                    "    {} - Toggle AST visualization mode",
+                    ":ast".cyan()
+                );
+                let _ = writeln!(writer, "    {} - Show current mode", ":mode".cyan());
+                let _ = writeln!(writer, "    {} - Show this help", ":help".cyan());
+                let _ = writeln!(writer, "    {} - Exit the REPL", "exit".cyan());
+                true
+            }
+            _ => {
+                let _ = writeln!(
+                    writer,
+                    "  {}: Unknown command '{}'",
+                    "Error".red().bold(),
+                    input
+                );
+                let _ = writeln!(writer, "  Type {} for available commands", ":help".cyan());
+                true
             }
         }
     }
@@ -196,6 +287,15 @@ impl Repl {
                 return;
             }
         };
+
+        if self.mode == ReplMode::Ast {
+            let nt = self.resolver.snapshot_name_table();
+            let mut visualizer = TypedAstVisualizer::new(&nt);
+            let ast_output = visualizer.visualize_statement(&typed);
+            let _ = writer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)));
+            let _ = writeln!(writer, "{}", ast_output);
+            let _ = writer.reset();
+        }
 
         match eval_statement(&mut self.runtime_env, &typed, &self.custom_fns) {
             Ok(val) => {
