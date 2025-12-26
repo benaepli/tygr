@@ -6,7 +6,7 @@ use crate::analysis::format::{
 use crate::analysis::inference::{Environment, Inferrer, TypedGroup, TypedStatement};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, Resolver, TypeName};
-use crate::ir::closure::{Converter, Program};
+use crate::ir::closure::{Converter, Program, VariantDef};
 use crate::lexer::Lexer;
 use crate::parser::{
     Declaration, Definition, ReplStatement, Statement, TypeAlias, Variant, parse_program,
@@ -136,6 +136,7 @@ pub fn compile_script(
 
 pub struct TypedProgram {
     pub groups: Vec<TypedGroup>,
+    pub variants: Vec<VariantDef>,
     pub name_table: NameTable,
     pub next_name: Name,
     pub next_type_name: TypeName,
@@ -236,6 +237,7 @@ pub fn compile_typed_program(
 
     Ok(TypedProgram {
         groups,
+        variants: inferrer.get_variant_definitions(),
         name_table,
         next_name,
         next_type_name,
@@ -249,6 +251,9 @@ pub fn compile_program(
 ) -> Result<(Program, NameTable), anyhow::Error> {
     let typed = compile_typed_program(input, name, writer)?;
     let mut converter = Converter::new(typed.next_name, typed.next_type_name);
+    for var in typed.variants {
+        converter.register_variant(var);
+    }
     let program = converter.convert_program(typed.groups);
     Ok((program, typed.name_table))
 }

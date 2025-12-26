@@ -740,7 +740,11 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
             nullary,
         } => {
             if *nullary {
-                Ok(Rc::new(Value::Variant(Rc::new(Value::Unit), *variant, *ctor)))
+                Ok(Rc::new(Value::Variant(
+                    Rc::new(Value::Unit),
+                    *variant,
+                    *ctor,
+                )))
             } else {
                 Ok(Rc::new(Value::Constructor(*variant, *ctor)))
             }

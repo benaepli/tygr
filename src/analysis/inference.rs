@@ -8,6 +8,7 @@ use crate::analysis::resolver::{
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
 };
+use crate::ir::closure::{ConstructorDef, VariantDef};
 use crate::parser::{BinOp, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -214,9 +215,10 @@ pub enum TypedKind {
 }
 
 #[derive(Debug, Clone)]
-struct TypedVariant {
+pub struct TypedVariant {
     pub schemes: HashMap<Name, TypeScheme>,
     pub ty: Rc<Type>,
+    pub definition: VariantDef,
 }
 
 pub type Environment = HashMap<Name, TypeScheme>;
@@ -440,6 +442,13 @@ impl Inferrer {
         }
     }
 
+    pub fn get_variant_definitions(&self) -> Vec<VariantDef> {
+        self.variants
+            .values()
+            .map(|v| v.definition.clone())
+            .collect()
+    }
+
     pub fn register_variant(&mut self, variant: ResolvedVariant) -> Result<(), TypeError> {
         let mut params = Vec::new();
         let mut param_types = Vec::new();
@@ -477,7 +486,7 @@ impl Inferrer {
             .collect();
         let mut schemes = HashMap::new();
 
-        for (name, arg_ty_opt) in inferred_constructors {
+        for (name, arg_ty_opt) in inferred_constructors.clone() {
             let ret_ty = self.apply_wrap(variant_ty.clone(), &param_types);
 
             let ctor_ty = match arg_ty_opt {
@@ -493,11 +502,21 @@ impl Inferrer {
             );
         }
 
+        let definition = VariantDef {
+            name: variant.name,
+            type_params: params.clone(),
+            constructors: inferred_constructors
+                .into_iter()
+                .map(|(name, payload)| ConstructorDef { name, payload })
+                .collect(),
+        };
+
         self.variants.insert(
             variant.name,
             TypedVariant {
                 schemes,
                 ty: variant_ty,
+                definition, // Store it here
             },
         );
         Ok(())
@@ -816,7 +835,11 @@ impl Inferrer {
                         self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
 
                         Ok(TypedPattern {
-                            kind: TypedPatternKind::Constructor(variant_id, ctor_id, Some(Box::new(typed_pat))),
+                            kind: TypedPatternKind::Constructor(
+                                variant_id,
+                                ctor_id,
+                                Some(Box::new(typed_pat)),
+                            ),
                             ty: variant_ty.clone(),
                             span,
                         })

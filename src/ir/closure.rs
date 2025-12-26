@@ -10,6 +10,20 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub struct Program {
     pub clusters: Vec<Cluster>,
+    pub variants: Vec<VariantDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantDef {
+    pub name: TypeName,
+    pub type_params: Vec<TypeID>,
+    pub constructors: Vec<ConstructorDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstructorDef {
+    pub name: Name,
+    pub payload: Option<Rc<Type>>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +194,7 @@ pub struct Converter {
     counter: Name,
     type_counter: TypeName,
     globals: HashMap<Name, Rc<Type>>,
+    variants: BTreeMap<TypeName, VariantDef>,
 }
 
 impl Converter {
@@ -189,6 +204,7 @@ impl Converter {
             counter: base,
             type_counter: base_type,
             globals: HashMap::new(),
+            variants: BTreeMap::new(),
         }
     }
 
@@ -202,6 +218,10 @@ impl Converter {
         let n = self.type_counter;
         self.type_counter.0 += 1;
         n
+    }
+
+    pub fn register_variant(&mut self, def: VariantDef) {
+        self.variants.insert(def.name, def);
     }
 
     pub fn convert_program(&mut self, groups: Vec<TypedGroup>) -> Program {
@@ -241,7 +261,14 @@ impl Converter {
                 }
             }
         }
-        Program { clusters }
+
+        for def in self.definitions.drain(..) {
+            clusters.push(Cluster::NonRecursive(def));
+        }
+        Program {
+            clusters,
+            variants: self.variants.values().cloned().collect(),
+        }
     }
 
     fn convert_pattern(&self, pat: TypedPattern) -> Pattern {
