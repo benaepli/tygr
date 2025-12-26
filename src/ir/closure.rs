@@ -11,6 +11,7 @@ use std::rc::Rc;
 pub struct Program {
     pub clusters: Vec<Cluster>,
     pub variants: Vec<VariantDef>,
+    pub next_name: Name,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +269,7 @@ impl Converter {
         Program {
             clusters,
             variants: self.variants.values().cloned().collect(),
+            next_name: self.counter,
         }
     }
 

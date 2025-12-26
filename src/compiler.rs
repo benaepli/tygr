@@ -244,7 +244,7 @@ pub fn compile_typed_program(
     })
 }
 
-pub fn compile_program(
+pub fn compile_closure_program(
     input: &str,
     name: &str,
     writer: &mut impl WriteStyle,
@@ -256,4 +256,15 @@ pub fn compile_program(
     }
     let program = converter.convert_program(typed.groups);
     Ok((program, typed.name_table))
+}
+
+pub fn compile_constructor_program(
+    input: &str,
+    name: &str,
+    writer: &mut impl WriteStyle,
+) -> Result<(crate::ir::constructor::Program, NameTable), anyhow::Error> {
+    let (closure_program, name_table) = compile_closure_program(input, name, writer)?;
+    let mut converter = crate::ir::constructor::Converter::new(closure_program.next_name);
+    let constructor_program = converter.convert_program(closure_program);
+    Ok((constructor_program, name_table))
 }
