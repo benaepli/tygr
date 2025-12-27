@@ -240,6 +240,9 @@ impl Converter {
                         val: converted_expr,
                     };
                     clusters.push(Cluster::NonRecursive(Definition::Global(global_def)));
+                    for generated_def in self.definitions.drain(..) {
+                        clusters.push(Cluster::NonRecursive(generated_def));
+                    }
                 }
                 TypedGroup::Recursive(defs) => {
                     for def in &defs {
@@ -257,14 +260,13 @@ impl Converter {
                             val: converted_expr,
                         };
                         converted_defs.push(Definition::Global(global_def));
+                        for generated_def in self.definitions.drain(..) {
+                            clusters.push(Cluster::NonRecursive(generated_def));
+                        }
                     }
                     clusters.push(Cluster::Recursive(converted_defs));
                 }
             }
-        }
-
-        for def in self.definitions.drain(..) {
-            clusters.push(Cluster::NonRecursive(def));
         }
         Program {
             clusters,

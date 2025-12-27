@@ -4,7 +4,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use tygr::analysis::main_function::find_and_verify_main;
-use tygr::compiler::{compile_constructor_program, compile_closure_program, compile_script, compile_typed_program};
+use tygr::compiler::{
+    compile_closure_program, compile_constructor_program, compile_script, compile_typed_program,
+};
 use tygr::custom::CustomFnRegistry;
 use tygr::interpreter;
 use tygr::interpreter::{ValueDisplay, eval_groups, eval_statement, run_main};
@@ -124,13 +126,14 @@ fn visualize_constructor(path: &PathBuf) {
     let input = read_file(path);
 
     let mut writer = StandardStream::stderr(ColorChoice::Auto);
-    let (program, name_table) = match compile_constructor_program(&input, &filename_str, &mut writer) {
-        Err(e) => {
-            eprintln!("Terminating with error: {}", e);
-            process::exit(1);
-        }
-        Ok(c) => c,
-    };
+    let (program, name_table) =
+        match compile_constructor_program(&input, &filename_str, &mut writer) {
+            Err(e) => {
+                eprintln!("Terminating with error: {}", e);
+                process::exit(1);
+            }
+            Ok(c) => c,
+        };
 
     println!("{}", visualize_constructor_ir(&program, &name_table));
 }

@@ -184,6 +184,7 @@ impl Converter {
     }
 
     pub fn convert_program(&mut self, prog: ClosureProgram) -> Program {
+        let mut new_clusters = Vec::new();
         for variant in &prog.variants {
             for (index, ctor) in variant.constructors.iter().enumerate() {
                 let tag = index as u32;
@@ -235,11 +236,13 @@ impl Converter {
                     };
 
                     self.generated_funcs.push(func_def);
+                    for func in self.generated_funcs.drain(..) {
+                        new_clusters.push(Cluster::NonRecursive(Definition::Function(func)));
+                    }
                 }
             }
         }
 
-        let mut new_clusters = Vec::new();
         for cluster in prog.clusters {
             match cluster {
                 ClosureCluster::NonRecursive(def) => {
@@ -254,10 +257,6 @@ impl Converter {
                     new_clusters.push(Cluster::Recursive(new_defs));
                 }
             }
-        }
-
-        for func in self.generated_funcs.drain(..) {
-            new_clusters.push(Cluster::NonRecursive(Definition::Function(func)));
         }
 
         Program {
