@@ -5,7 +5,24 @@ pub mod main_function;
 pub mod name_table;
 pub mod resolver;
 
-use crate::parser::{Expr, ExprKind, Pattern, PatternKind};
+use crate::parser::{Definition, Expr, ExprKind, Pattern, PatternKind, Span};
+
+#[derive(Debug, Clone)]
+pub enum InitialAnalysisError {
+    NonStaticDefinition(String, Span),
+}
+
+pub fn check_static_definitions(definitions: &[Definition]) -> Result<(), InitialAnalysisError> {
+    for definition in definitions {
+        if !is_static(&definition.expr) {
+            return Err(InitialAnalysisError::NonStaticDefinition(
+                definition.name.clone(),
+                definition.span,
+            ));
+        }
+    }
+    Ok(())
+}
 
 pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
     let kind = match &pattern.kind {
@@ -30,10 +47,13 @@ pub fn pattern_to_expr(pattern: &Pattern) -> Expr {
                 .collect();
             ExprKind::RecordLit(expr_fields)
         }
-        PatternKind::Constructor(name, e) => ExprKind::App(
-            Box::new(Expr::new(ExprKind::Var(name.clone()), pattern.span)),
-            Box::new(pattern_to_expr(e)),
-        ),
+        PatternKind::Constructor(name, e) => match e {
+            Some(inner) => ExprKind::App(
+                Box::new(Expr::new(ExprKind::Var(name.clone()), pattern.span)),
+                Box::new(pattern_to_expr(inner)),
+            ),
+            None => ExprKind::Var(name.clone()),
+        },
     };
     Expr {
         kind,

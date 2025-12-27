@@ -1,6 +1,5 @@
 use crate::analysis::inference::{
     Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind, TypedStatement,
-    TypedStatementKind,
 };
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{Name, TypeName};
@@ -174,6 +173,8 @@ pub enum EvalError {
     TypeMismatch(String),
     NotAFunction,
     NonExhaustiveMatch,
+    CustomFunctionNotFound(CustomFnId),
+    IOError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -184,6 +185,8 @@ impl fmt::Display for EvalError {
             EvalError::TypeMismatch(msg) => write!(f, "Type mismatch: {}", msg),
             EvalError::NotAFunction => write!(f, "Attempted to call a non-function value"),
             EvalError::NonExhaustiveMatch => write!(f, "Non-exhaustive match"),
+            EvalError::CustomFunctionNotFound(id) => write!(f, "Custom function {} not found", id),
+            EvalError::IOError(msg) => write!(f, "IO error: {}", msg),
         }
     }
 }
@@ -336,7 +339,10 @@ fn bind_pattern(
                 && variant == variant_id
             {
                 if ctor == ctor_id {
-                    bind_pattern(pat, v.clone(), env)
+                    match pat {
+                        Some(p) => bind_pattern(p, v.clone(), env),
+                        None => Ok(()), // Nullary constructor, nothing to bind
+                    }
                 } else {
                     Err(EvalError::PatternMismatch(format!(
                         "expected constructor {}, found constructor {}",
@@ -530,11 +536,8 @@ fn eval_builtin(op: BuiltinFn, args: &[Rc<Value>], env: &mut Environment) -> Eva
         Print => {
             let s = as_string!(&args[0]);
             let mut out = env.output.borrow_mut();
-            if let Err(_) = writeln!(out, "{}", s) {
-                // In a robust system we might want to return an IO error,
-                // but for now we'll just ignore it or log it?
-                // Alternatively, return EvalError.
-            }
+            writeln!(out, "{}", s)
+                .map_err(|e| EvalError::IOError(format!("Failed to write to output: {}", e)))?;
             Ok(Rc::new(Value::String(s)))
         }
         StringOfFloat => Ok(Rc::new(Value::String(Rc::new(
@@ -601,7 +604,7 @@ fn apply(
         Value::Custom(id) => {
             let custom_fn = custom_fns
                 .get(*id)
-                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+                .ok_or(EvalError::CustomFunctionNotFound(*id))?;
             let arity = custom_fn.arity();
             if arity == 1 {
                 custom_fn.call(&[arg], env)
@@ -615,7 +618,7 @@ fn apply(
         Value::PartialCustom { id, args } => {
             let custom_fn = custom_fns
                 .get(*id)
-                .ok_or_else(|| EvalError::TypeMismatch(format!("Custom function {} not found", id)))?;
+                .ok_or(EvalError::CustomFunctionNotFound(*id))?;
             let arity = custom_fn.arity();
             let mut new_args = args.clone();
             new_args.push(arg);
@@ -654,12 +657,6 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
             body: body.clone(),
             env: env.clone(),
         })),
-        TypedKind::Let { name, value, body } => {
-            let val = eval(value, env, custom_fns)?;
-            let mut new_env = env.clone();
-            bind_pattern(name, val, &mut new_env)?;
-            eval(body, &mut new_env, custom_fns)
-        }
         TypedKind::If(cond, then_branch, else_branch) => {
             let cond_val = eval(cond, env, custom_fns)?;
             match &*cond_val {
@@ -677,8 +674,8 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
         }
         TypedKind::Match(expr, branches) => {
             let val = eval(expr, env, custom_fns)?;
-            let mut new_env = env.clone();
             for branch in branches {
+                let mut new_env = env.clone();
                 let result = bind_pattern(&branch.pattern, val.clone(), &mut new_env);
                 if result.is_err() {
                     continue;
@@ -737,8 +734,20 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
                 ))),
             }
         }
-        &TypedKind::Constructor(variant_id, ctor_id) => {
-            Ok(Rc::new(Value::Constructor(variant_id, ctor_id)))
+        TypedKind::Constructor {
+            variant,
+            ctor,
+            nullary,
+        } => {
+            if *nullary {
+                Ok(Rc::new(Value::Variant(
+                    Rc::new(Value::Unit),
+                    *variant,
+                    *ctor,
+                )))
+            } else {
+                Ok(Rc::new(Value::Constructor(*variant, *ctor)))
+            }
         }
 
         TypedKind::RecRecord(fields) => {
@@ -769,16 +778,9 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
         TypedKind::Block(statements, tail) => {
             let mut block_env = env.clone();
 
-            for stmt in statements {
-                match &stmt.kind {
-                    TypedStatementKind::Let { pattern, value } => {
-                        let val = eval(value, &mut block_env, custom_fns)?;
-                        bind_pattern(pattern, val, &mut block_env)?;
-                    }
-                    TypedStatementKind::Expr(expr) => {
-                        eval(expr, &mut block_env, custom_fns)?;
-                    }
-                }
+            for TypedStatement { pattern, value, .. } in statements {
+                let val = eval(value, &mut block_env, custom_fns)?;
+                bind_pattern(pattern, val, &mut block_env)?;
             }
 
             match tail {
@@ -801,14 +803,10 @@ pub fn eval_statement(
     stmt: &TypedStatement,
     custom_fns: &CustomFnRegistry,
 ) -> EvalResult {
-    match &stmt.kind {
-        TypedStatementKind::Let { pattern, value } => {
-            let val = eval(value, env, custom_fns)?;
-            bind_pattern(pattern, val.clone(), env)?;
-            Ok(val)
-        }
-        TypedStatementKind::Expr(expr) => eval(expr, env, custom_fns),
-    }
+    let TypedStatement { value, pattern, .. } = stmt;
+    let val = eval(value, env, custom_fns)?;
+    bind_pattern(pattern, val.clone(), env)?;
+    Ok(val)
 }
 
 pub fn eval_groups(
@@ -849,7 +847,6 @@ pub fn run_main(
     let main_val = env
         .get(&main_name)
         .ok_or(EvalError::UndefinedVariable(main_name))?;
-
 
     apply(main_val, Rc::new(Value::Unit), env, custom_fns)
 }

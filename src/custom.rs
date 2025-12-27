@@ -14,14 +14,13 @@ impl fmt::Display for CustomFnId {
     }
 }
 
-
 pub trait CustomFn: 'static {
     fn name(&self) -> &str;
 
     fn arity(&self) -> usize;
-    
+
     fn type_scheme(&self) -> TypeScheme;
-    
+
     fn call(&self, args: &[Rc<Value>], env: &mut Environment) -> EvalResult;
 }
 
@@ -39,7 +38,7 @@ impl CustomFnRegistry {
             name_to_id: std::collections::HashMap::new(),
         }
     }
-    
+
     pub fn register(&mut self, name: Name, func: Rc<dyn CustomFn>) -> CustomFnId {
         let id = CustomFnId(self.functions.len());
         self.functions.push(func);

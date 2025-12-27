@@ -1,8 +1,12 @@
+use crate::analysis::check_static_definitions;
 use crate::analysis::dependencies::reorder_definitions;
-use crate::analysis::format::{report_resolution_errors, report_type_errors};
+use crate::analysis::format::{
+    report_initial_analysis_errors, report_resolution_errors, report_type_errors,
+};
 use crate::analysis::inference::{Environment, Inferrer, TypedGroup, TypedStatement};
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::Resolver;
+use crate::analysis::resolver::{Name, Resolver, TypeName};
+use crate::ir::closure::{Converter, Program, VariantDef};
 use crate::lexer::Lexer;
 use crate::parser::{
     Declaration, Definition, ReplStatement, Statement, TypeAlias, Variant, parse_program,
@@ -130,11 +134,19 @@ pub fn compile_script(
     Ok((typed_statements, name_table))
 }
 
-pub fn compile_program(
+pub struct TypedProgram {
+    pub groups: Vec<TypedGroup>,
+    pub variants: Vec<VariantDef>,
+    pub name_table: NameTable,
+    pub next_name: Name,
+    pub next_type_name: TypeName,
+}
+
+pub fn compile_typed_program(
     input: &str,
     name: &str,
     writer: &mut impl WriteStyle,
-) -> Result<(Vec<TypedGroup>, NameTable), anyhow::Error> {
+) -> Result<TypedProgram, anyhow::Error> {
     let mut lexer = Lexer::new(input);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(writer, input, &errors, name)?;
@@ -152,6 +164,11 @@ pub fn compile_program(
     };
 
     let (definitions, variants, aliases) = split_program(output);
+    if let Err(e) = check_static_definitions(&definitions) {
+        report_initial_analysis_errors(writer, input, &[e], name)?;
+        return Err(anyhow!("initial analysis error"));
+    }
+
     let mut resolver = Resolver::new();
     for variant in &variants {
         if let Err(e) = resolver.declare_variant(variant) {
@@ -196,6 +213,8 @@ pub fn compile_program(
     }
     let reordered = reorder_definitions(resolved_definitions);
 
+    let next_name = resolver.next_name_id();
+    let next_type_name = resolver.next_type_name_id();
     let name_table = resolver.into_name_table();
     let mut inferrer = Inferrer::new();
     for variant in resolved_variants {
@@ -216,5 +235,36 @@ pub fn compile_program(
         Ok(t) => t,
     };
 
-    Ok((groups, name_table))
+    Ok(TypedProgram {
+        groups,
+        variants: inferrer.get_variant_definitions(),
+        name_table,
+        next_name,
+        next_type_name,
+    })
+}
+
+pub fn compile_closure_program(
+    input: &str,
+    name: &str,
+    writer: &mut impl WriteStyle,
+) -> Result<(Program, NameTable), anyhow::Error> {
+    let typed = compile_typed_program(input, name, writer)?;
+    let mut converter = Converter::new(typed.next_name, typed.next_type_name);
+    for var in typed.variants {
+        converter.register_variant(var);
+    }
+    let program = converter.convert_program(typed.groups);
+    Ok((program, typed.name_table))
+}
+
+pub fn compile_constructor_program(
+    input: &str,
+    name: &str,
+    writer: &mut impl WriteStyle,
+) -> Result<(crate::ir::constructor::Program, NameTable), anyhow::Error> {
+    let (closure_program, name_table) = compile_closure_program(input, name, writer)?;
+    let mut converter = crate::ir::constructor::Converter::new(closure_program.next_name);
+    let constructor_program = converter.convert_program(closure_program);
+    Ok((constructor_program, name_table))
 }

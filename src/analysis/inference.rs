@@ -2,12 +2,13 @@ use crate::analysis::dependencies::is_self_recursive;
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
     Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedDefinition, ResolvedKind,
-    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, ResolvedStatement,
-    ResolvedStatementKind, ResolvedVariant, TypeName,
+    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, ResolvedStatement, ResolvedVariant,
+    TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
 };
+use crate::ir::closure::{ConstructorDef, VariantDef};
 use crate::parser::{BinOp, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -25,7 +26,9 @@ pub enum Kind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct KindID(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, PartialOrd, Ord,
+)]
 pub struct TypeID(pub usize);
 
 impl fmt::Display for TypeID {
@@ -134,7 +137,7 @@ pub enum TypedPatternKind {
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
     Record(BTreeMap<String, TypedPattern>),
-    Constructor(TypeName, Name, Box<TypedPattern>),
+    Constructor(TypeName, Name, Option<Box<TypedPattern>>),
 }
 
 #[derive(Debug, Clone)]
@@ -156,22 +159,16 @@ pub struct TypedDefinition {
     pub name: (Name, String),
     pub expr: Box<Typed>,
     pub ty: Rc<Type>,
+    pub scheme: TypeScheme,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum TypedStatementKind {
-    Let {
-        pattern: TypedPattern,
-        value: Box<Typed>,
-    },
-    Expr(Box<Typed>),
-}
-
-#[derive(Debug, Clone)]
 pub struct TypedStatement {
-    pub kind: TypedStatementKind,
+    pub pattern: TypedPattern,
+    pub value: Box<Typed>,
     pub ty: Rc<Type>,
+    pub bindings: Vec<(Name, TypeScheme)>, // Maps names bound in the pattern to a scheme
     pub span: Span,
 }
 
@@ -191,11 +188,6 @@ pub enum TypedKind {
         captures: HashSet<Name>,
     },
     App(Box<Typed>, Box<Typed>),
-    Let {
-        name: TypedPattern,
-        value: Box<Typed>,
-        body: Box<Typed>,
-    },
     If(Box<Typed>, Box<Typed>, Box<Typed>),
     Match(Box<Typed>, Vec<TypedMatchPattern>),
     Block(Vec<TypedStatement>, Option<Box<Typed>>),
@@ -215,13 +207,18 @@ pub enum TypedKind {
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
-    Constructor(TypeName, Name),
+    Constructor {
+        variant: TypeName,
+        ctor: Name,
+        nullary: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedVariant {
     pub schemes: HashMap<Name, TypeScheme>,
     pub ty: Rc<Type>,
+    pub definition: VariantDef,
 }
 
 pub type Environment = HashMap<Name, TypeScheme>;
@@ -445,6 +442,13 @@ impl Inferrer {
         }
     }
 
+    pub fn get_variant_definitions(&self) -> Vec<VariantDef> {
+        self.variants
+            .values()
+            .map(|v| v.definition.clone())
+            .collect()
+    }
+
     pub fn register_variant(&mut self, variant: ResolvedVariant) -> Result<(), TypeError> {
         let mut params = Vec::new();
         let mut param_types = Vec::new();
@@ -460,7 +464,10 @@ impl Inferrer {
 
         let mut inferred_constructors = Vec::new();
         for (name, ctor) in variant.constructors {
-            let ty = self.instantiate_annotation(&ctor.annotation)?;
+            let ty = match &ctor.annotation {
+                Some(annot) => Some(self.instantiate_annotation(annot)?),
+                None => None,
+            };
             inferred_constructors.push((name, ty));
         }
 
@@ -479,23 +486,37 @@ impl Inferrer {
             .collect();
         let mut schemes = HashMap::new();
 
-        for (name, arg_ty) in inferred_constructors {
+        for (name, arg_ty_opt) in inferred_constructors.clone() {
             let ret_ty = self.apply_wrap(variant_ty.clone(), &param_types);
 
+            let ctor_ty = match arg_ty_opt {
+                Some(arg_ty) => Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
+                None => ret_ty,
+            };
             schemes.insert(
                 name,
                 TypeScheme {
                     vars: scheme_vars.clone(),
-                    ty: Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
+                    ty: ctor_ty,
                 },
             );
         }
+
+        let definition = VariantDef {
+            name: variant.name,
+            type_params: params.clone(),
+            constructors: inferred_constructors
+                .into_iter()
+                .map(|(name, payload)| ConstructorDef { name, payload })
+                .collect(),
+        };
 
         self.variants.insert(
             variant.name,
             TypedVariant {
                 schemes,
                 ty: variant_ty,
+                definition, // Store it here
             },
         );
         Ok(())
@@ -700,7 +721,10 @@ impl Inferrer {
 
     pub fn infer(&mut self, expr: Resolved) -> Result<Typed, TypeError> {
         let env = Environment::new();
-        self.infer_type(&env, expr)
+        let mut typed_expr = self.infer_type(&env, expr)?;
+        self.resolve_types_in_expr(&mut typed_expr);
+
+        Ok(typed_expr)
     }
 
     fn get_list_constructor(&self) -> Rc<Type> {
@@ -804,18 +828,39 @@ impl Inferrer {
                 };
 
                 let ctor_ty = self.instantiate(&ctor_scheme);
-                let TypeKind::Function(arg_ty, variant_ty) = &ctor_ty.ty else {
-                    return Err(TypeError::InvalidConstructorType(span));
-                };
 
-                let typed_pat = self.infer_pattern(*pat, new_env)?;
-                self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
+                match (&ctor_ty.ty, pat) {
+                    (TypeKind::Function(arg_ty, variant_ty), Some(pat)) => {
+                        let typed_pat = self.infer_pattern(*pat, new_env)?;
+                        self.unify(&typed_pat.ty, arg_ty, typed_pat.span)?;
 
-                Ok(TypedPattern {
-                    kind: TypedPatternKind::Constructor(variant_id, ctor_id, Box::new(typed_pat)),
-                    ty: variant_ty.clone(),
-                    span,
-                })
+                        Ok(TypedPattern {
+                            kind: TypedPatternKind::Constructor(
+                                variant_id,
+                                ctor_id,
+                                Some(Box::new(typed_pat)),
+                            ),
+                            ty: variant_ty.clone(),
+                            span,
+                        })
+                    }
+                    (TypeKind::Function(_, _), None) => {
+                        // Constructor expects an argument but none provided
+                        Err(TypeError::InvalidConstructorType(span))
+                    }
+                    (_, Some(_)) => {
+                        // Constructor doesn't expect an argument but one was provided
+                        Err(TypeError::InvalidConstructorType(span))
+                    }
+                    (_, None) => {
+                        // Nullary constructor - the constructor type IS the variant type
+                        Ok(TypedPattern {
+                            kind: TypedPatternKind::Constructor(variant_id, ctor_id, None),
+                            ty: ctor_ty,
+                            span,
+                        })
+                    }
+                }
             }
         }
     }
@@ -922,49 +967,6 @@ impl Inferrer {
                 Ok(Typed {
                     kind: TypedKind::App(Box::new(typed_func), Box::new(typed_arg)),
                     ty: result_ty_subst,
-                    span,
-                })
-            }
-
-            ResolvedKind::Let {
-                pattern,
-                value,
-                body,
-                value_type,
-                type_params,
-            } => {
-                for param_id in type_params {
-                    let ty = Type::new(self.new_type(), self.new_kind());
-                    self.type_ctx.insert(param_id, ty);
-                }
-                let typed_value = self.infer_type(env, *value)?;
-                if let Some(annot) = value_type {
-                    let expected_ty = self.instantiate_annotation(&annot)?;
-                    self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
-                }
-                let value_ty = self.apply_subst(&typed_value.ty);
-
-                let mut new_env = Environment::new();
-                let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
-
-                self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
-
-                let mut extended_env = env.clone();
-                for (name, scheme) in new_env {
-                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
-                    extended_env.insert(name, s);
-                }
-
-                let typed_body = self.infer_type(&extended_env, *body)?;
-                let body_ty = self.apply_subst(&typed_body.ty);
-
-                Ok(Typed {
-                    kind: TypedKind::Let {
-                        name: typed_pattern,
-                        value: Box::new(typed_value),
-                        body: Box::new(typed_body),
-                    },
-                    ty: body_ty,
                     span,
                 })
             }
@@ -1196,8 +1198,13 @@ impl Inferrer {
                     return Err(TypeError::ConstructorNotFound(variant_id, ctor_id, span));
                 };
                 let ty = self.instantiate(&ctor);
+                let nullary = !matches!(&ty.ty, TypeKind::Function(_, _));
                 Ok(Typed {
-                    kind: TypedKind::Constructor(variant_id, ctor_id),
+                    kind: TypedKind::Constructor {
+                        variant: variant_id,
+                        ctor: ctor_id,
+                        nullary,
+                    },
                     ty,
                     span,
                 })
@@ -1206,57 +1213,54 @@ impl Inferrer {
                 let mut env = env.clone();
                 let mut typed_statements = Vec::new();
 
-                for stmt in statements {
-                    let stmt_span = stmt.span;
-                    match stmt.kind {
-                        ResolvedStatementKind::Let {
-                            pattern,
-                            value,
-                            value_type,
-                            type_params,
-                        } => {
-                            for param_id in type_params {
-                                let ty = Type::new(self.new_type(), self.new_kind());
-                                self.type_ctx.insert(param_id, ty);
-                            }
-
-                            let typed_value = self.infer_type(&env, *value)?;
-                            if let Some(annot) = value_type {
-                                let expected_ty = self.instantiate_annotation(&annot)?;
-                                self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
-                            }
-
-                            let value_ty = self.apply_subst(&typed_value.ty);
-
-                            let mut new_env = Environment::new();
-                            let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
-
-                            self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
-
-                            for (name, scheme) in new_env {
-                                let s = self.generalize(&env, &self.apply_subst(&scheme.ty));
-                                env.insert(name, s);
-                            }
-
-                            typed_statements.push(TypedStatement {
-                                kind: TypedStatementKind::Let {
-                                    pattern: typed_pattern,
-                                    value: Box::new(typed_value),
-                                },
-                                ty: value_ty,
-                                span: stmt_span,
-                            });
-                        }
-                        ResolvedStatementKind::Expr(expr) => {
-                            let typed_expr = self.infer_type(&env, *expr)?;
-                            let ty = typed_expr.ty.clone();
-                            typed_statements.push(TypedStatement {
-                                kind: TypedStatementKind::Expr(Box::new(typed_expr)),
-                                ty,
-                                span: stmt_span,
-                            });
-                        }
+                for ResolvedStatement {
+                    pattern,
+                    value,
+                    value_type,
+                    type_params,
+                    span: stmt_span,
+                } in statements
+                {
+                    let is_value = value.kind.is_syntactic_value();
+                    for param_id in type_params {
+                        let ty = Type::new(self.new_type(), self.new_kind());
+                        self.type_ctx.insert(param_id, ty);
                     }
+
+                    let typed_value = self.infer_type(&env, *value)?;
+                    if let Some(annot) = value_type {
+                        let expected_ty = self.instantiate_annotation(&annot)?;
+                        self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+                    }
+
+                    let value_ty = self.apply_subst(&typed_value.ty);
+
+                    let mut new_env = Environment::new();
+                    let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
+
+                    self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+                    let mut bindings = Vec::new();
+                    for (name, scheme) in new_env {
+                        let s = if is_value {
+                            self.generalize(&env, &self.apply_subst(&scheme.ty))
+                        } else {
+                            TypeScheme {
+                                vars: vec![],
+                                ty: self.apply_subst(&scheme.ty),
+                            }
+                        };
+                        env.insert(name, s.clone());
+                        bindings.push((name, s));
+                    }
+
+                    typed_statements.push(TypedStatement {
+                        pattern: typed_pattern,
+                        value: Box::new(typed_value),
+                        bindings,
+                        ty: value_ty,
+                        span: stmt_span,
+                    });
                 }
 
                 let (typed_tail, block_ty) = if let Some(tail_expr) = tail {
@@ -1281,57 +1285,57 @@ impl Inferrer {
         env: &mut Environment,
         stmt: ResolvedStatement,
     ) -> Result<TypedStatement, TypeError> {
-        let span = stmt.span;
-        match stmt.kind {
-            ResolvedStatementKind::Let {
-                pattern,
-                value,
-                value_type,
-                type_params,
-            } => {
-                for param_id in type_params {
-                    let ty = Type::new(self.new_type(), self.new_kind());
-                    self.type_ctx.insert(param_id, ty);
-                }
-
-                let typed_value = self.infer_type(env, *value)?;
-
-                if let Some(annot) = value_type {
-                    let expected_ty = self.instantiate_annotation(&annot)?;
-                    self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
-                }
-
-                let value_ty = self.apply_subst(&typed_value.ty);
-
-                let mut new_pattern_bindings = Environment::new();
-                let typed_pattern = self.infer_pattern(pattern, &mut new_pattern_bindings)?;
-
-                self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
-
-                for (name, scheme) in new_pattern_bindings {
-                    let s = self.generalize(env, &self.apply_subst(&scheme.ty));
-                    env.insert(name, s);
-                }
-
-                Ok(TypedStatement {
-                    kind: TypedStatementKind::Let {
-                        pattern: typed_pattern,
-                        value: Box::new(typed_value),
-                    },
-                    ty: value_ty,
-                    span,
-                })
-            }
-            ResolvedStatementKind::Expr(expr) => {
-                let typed_expr = self.infer_type(env, *expr)?;
-                let ty = typed_expr.ty.clone();
-                Ok(TypedStatement {
-                    kind: TypedStatementKind::Expr(Box::new(typed_expr)),
-                    ty,
-                    span,
-                })
-            }
+        let ResolvedStatement {
+            pattern,
+            value,
+            value_type,
+            type_params,
+            span,
+        } = stmt;
+        let is_value = value.kind.is_syntactic_value();
+        for param_id in type_params {
+            let ty = Type::new(self.new_type(), self.new_kind());
+            self.type_ctx.insert(param_id, ty);
         }
+
+        let typed_value = self.infer_type(env, *value)?;
+
+        if let Some(annot) = value_type {
+            let expected_ty = self.instantiate_annotation(&annot)?;
+            self.unify(&typed_value.ty, &expected_ty, typed_value.span)?;
+        }
+
+        let value_ty = self.apply_subst(&typed_value.ty);
+
+        let mut new_pattern_bindings = Environment::new();
+        let typed_pattern = self.infer_pattern(pattern, &mut new_pattern_bindings)?;
+
+        self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+
+        let mut bindings = Vec::new();
+        for (name, scheme) in new_pattern_bindings {
+            let s = if is_value {
+                self.generalize(env, &self.apply_subst(&scheme.ty))
+            } else {
+                TypeScheme {
+                    vars: vec![],
+                    ty: self.apply_subst(&scheme.ty),
+                }
+            };
+            bindings.push((name, s.clone()));
+            env.insert(name, s);
+        }
+
+        let mut typed_stmt = TypedStatement {
+            pattern: typed_pattern,
+            value: Box::new(typed_value),
+            bindings,
+            ty: value_ty,
+            span,
+        };
+
+        self.resolve_types_in_statement(&mut typed_stmt);
+        Ok(typed_stmt)
     }
 
     pub fn infer_definitions(
@@ -1359,6 +1363,9 @@ impl Inferrer {
             }
         }
 
+        for group in &mut typed_groups {
+            self.resolve_types_in_group(group);
+        }
         Ok((typed_groups, env))
     }
 
@@ -1374,12 +1381,13 @@ impl Inferrer {
         }
         let final_ty = self.apply_subst(&typed_expr.ty);
         let scheme = self.generalize(env, &final_ty);
-        env.insert(def.name.0, scheme);
+        env.insert(def.name.0, scheme.clone());
 
         Ok(TypedDefinition {
             name: def.name,
             expr: Box::new(typed_expr),
             ty: final_ty,
+            scheme,
             span: def.span,
         })
     }
@@ -1407,6 +1415,12 @@ impl Inferrer {
                     ty: func_ty.clone(),
                 },
             );
+
+            if let Some(annot) = &def.annotation {
+                let expected = self.instantiate_annotation(annot)?;
+                self.unify(&func_ty, &expected, def.span)?;
+            }
+
             temp_types.insert(def.name.0, func_ty);
         }
 
@@ -1419,18 +1433,16 @@ impl Inferrer {
             let typed_expr = self.infer_type(&rec_env, *def.expr)?;
             let placeholder_ty = temp_types.get(&name.0).unwrap();
 
-            if let Some(annot) = &def.annotation {
-                let expected = self.instantiate_annotation(annot)?;
-                self.unify(&typed_expr.ty, &expected, span)?;
-                self.unify(placeholder_ty, &expected, span)?;
-            }
-
             self.unify(placeholder_ty, &typed_expr.ty, span)?;
 
             typed_defs.push(TypedDefinition {
                 name,
                 expr: Box::new(typed_expr),
                 ty: placeholder_ty.clone(),
+                scheme: TypeScheme {
+                    vars: Vec::new(),
+                    ty: placeholder_ty.clone(),
+                },
                 span,
             });
         }
@@ -1438,10 +1450,109 @@ impl Inferrer {
         for typed_def in &mut typed_defs {
             let final_ty = self.apply_subst(&typed_def.ty);
             typed_def.ty = final_ty.clone();
+
             let scheme = self.generalize(env, &final_ty);
+            typed_def.scheme = scheme.clone();
             env.insert(typed_def.name.0, scheme);
         }
 
         Ok(typed_defs)
+    }
+
+    fn resolve_types_in_group(&self, group: &mut TypedGroup) {
+        match group {
+            TypedGroup::NonRecursive(def) => self.resolve_types_in_definition(def),
+            TypedGroup::Recursive(defs) => {
+                for def in defs {
+                    self.resolve_types_in_definition(def);
+                }
+            }
+        }
+    }
+
+    fn resolve_types_in_definition(&self, def: &mut TypedDefinition) {
+        def.ty = self.apply_subst(&def.ty);
+        self.resolve_types_in_expr(&mut def.expr);
+    }
+
+    fn resolve_types_in_statement(&self, stmt: &mut TypedStatement) {
+        stmt.ty = self.apply_subst(&stmt.ty);
+        self.resolve_types_in_pattern(&mut stmt.pattern);
+        self.resolve_types_in_expr(&mut stmt.value);
+    }
+
+    fn resolve_types_in_pattern(&self, pat: &mut TypedPattern) {
+        pat.ty = self.apply_subst(&pat.ty);
+
+        match &mut pat.kind {
+            TypedPatternKind::Pair(p1, p2) | TypedPatternKind::Cons(p1, p2) => {
+                self.resolve_types_in_pattern(p1);
+                self.resolve_types_in_pattern(p2);
+            }
+            TypedPatternKind::Record(fields) => {
+                for p in fields.values_mut() {
+                    self.resolve_types_in_pattern(p);
+                }
+            }
+            TypedPatternKind::Constructor(_, _, p) => {
+                if let Some(p) = p {
+                    self.resolve_types_in_pattern(p);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_types_in_expr(&self, expr: &mut Typed) {
+        expr.ty = self.apply_subst(&expr.ty);
+        match &mut expr.kind {
+            TypedKind::Lambda { param, body, .. } => {
+                self.resolve_types_in_pattern(param);
+                self.resolve_types_in_expr(body);
+            }
+            TypedKind::App(f, a) => {
+                self.resolve_types_in_expr(f);
+                self.resolve_types_in_expr(a);
+            }
+            TypedKind::If(cond, cons, alt) => {
+                self.resolve_types_in_expr(cond);
+                self.resolve_types_in_expr(cons);
+                self.resolve_types_in_expr(alt);
+            }
+            TypedKind::Match(target, branches) => {
+                self.resolve_types_in_expr(target);
+                for branch in branches {
+                    branch.ty = self.apply_subst(&branch.ty);
+                    self.resolve_types_in_pattern(&mut branch.pattern);
+                    self.resolve_types_in_expr(&mut branch.expr);
+                }
+            }
+            TypedKind::Block(stmts, tail) => {
+                for stmt in stmts {
+                    self.resolve_types_in_statement(stmt);
+                }
+                if let Some(tail_expr) = tail {
+                    self.resolve_types_in_expr(tail_expr);
+                }
+            }
+            TypedKind::Cons(h, t) | TypedKind::PairLit(h, t) | TypedKind::BinOp(_, h, t) => {
+                self.resolve_types_in_expr(h);
+                self.resolve_types_in_expr(t);
+            }
+            TypedKind::RecordLit(fields) => {
+                for expr in fields.values_mut() {
+                    self.resolve_types_in_expr(expr);
+                }
+            }
+            TypedKind::RecRecord(fields) => {
+                for (_, expr) in fields.values_mut() {
+                    self.resolve_types_in_expr(expr);
+                }
+            }
+            TypedKind::FieldAccess(expr, _) => {
+                self.resolve_types_in_expr(expr);
+            }
+            _ => {}
+        }
     }
 }

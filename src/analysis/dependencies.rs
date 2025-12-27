@@ -1,6 +1,4 @@
-use crate::analysis::resolver::{
-    Name, Resolved, ResolvedDefinition, ResolvedKind, ResolvedStatementKind,
-};
+use crate::analysis::resolver::{Name, Resolved, ResolvedDefinition, ResolvedKind};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
 use std::collections::{HashMap, HashSet};
@@ -88,11 +86,6 @@ fn get_dependencies(expr: &Resolved) -> HashSet<Name> {
             set.extend(get_dependencies(e));
             set
         }
-        ResolvedKind::Let { value, body, .. } => {
-            let mut set = get_dependencies(value);
-            set.extend(get_dependencies(body));
-            set
-        }
         ResolvedKind::Match(head, branches) => {
             let mut set = get_dependencies(head);
             for branch in branches {
@@ -103,14 +96,7 @@ fn get_dependencies(expr: &Resolved) -> HashSet<Name> {
         ResolvedKind::Block(stmts, tail) => {
             let mut set = HashSet::new();
             for stmt in stmts {
-                match &stmt.kind {
-                    ResolvedStatementKind::Let { value, .. } => {
-                        set.extend(get_dependencies(value));
-                    }
-                    ResolvedStatementKind::Expr(e) => {
-                        set.extend(get_dependencies(e));
-                    }
-                }
+                set.extend(get_dependencies(&stmt.value));
             }
             if let Some(t) = tail {
                 set.extend(get_dependencies(t));

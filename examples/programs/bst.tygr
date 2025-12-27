@@ -1,0 +1,61 @@
+enum Option[t] =
+  | Some(t)
+  | None
+
+enum Tree[t] =
+  | Empty
+  | Node((Tree[t], t, Tree[t]))
+
+type TreeStats = { sum: int, depth: int }
+
+def insert tree, value =
+  match tree with
+  | Empty => Node((Empty, value, Empty))
+  | Node((left, v, right)) =>
+      if value < v then
+        Node((insert left value, v, right))
+      else if value > v then
+        Node((left, v, insert right value))
+      else
+        tree
+
+def find tree, target =
+  match tree with
+  | Empty => None
+  | Node((left, v, right)) =>
+      if target == v then Some(v)
+      else if target < v then find left target
+      else find right target
+
+def map_tree f, tree =
+  match tree with
+  | Empty => Empty
+  | Node((l, v, r)) =>
+      Node((map_tree f l, f v, map_tree f r))
+
+def get_stats: Tree[int] -> TreeStats tree =
+  match tree with
+  | Empty => { sum: 0, depth: 0 }
+  | Node((l, v, r)) => (
+      match (get_stats l, get_stats r) with
+      | (l_stats, r_stats) =>
+          let max_depth =
+            if l_stats.depth > r_stats.depth then l_stats.depth else r_stats.depth
+          in
+          {
+            sum: l_stats.sum + v + r_stats.sum,
+            depth: max_depth + 1
+          }
+  )
+
+def main () = {
+    let t0 = insert (Empty) 5;
+    let t1 = insert t0 3;
+    let t2 = insert t1 8;
+
+    let result_found = find t2 8;    // Some(8)
+    let result_missing = find t2 1;  // None
+
+    let stats: TreeStats = get_stats t2;
+    stats
+}
