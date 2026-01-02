@@ -190,6 +190,15 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "constructors must have function types that take an argument and return the variant type".to_string(),
                 ]),
+            TypeError::UnknownTypeAlias(name, span) => Diagnostic::error()
+                .with_message(format!("unknown type alias `{}`", name))
+                .with_labels(vec![
+                    Label::primary(file_id, span.start..span.end)
+                        .with_message("type alias not found"),
+                ])
+                .with_notes(vec![
+                    "this type alias should have been resolved during the resolution phase".to_string(),
+                ]),
             TypeError::KindMismatch(found, expected, span) => Diagnostic::error()
                 .with_message("kind mismatch")
                 .with_labels(vec![
@@ -201,6 +210,19 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "kinds must match when unifying types".to_string(),
                 ]),
+            TypeError::AliasCycle(cycle_path, span) => {
+                let cycle_str = cycle_path.join(" -> ");
+                Diagnostic::error()
+                    .with_message("type alias cycle detected")
+                    .with_labels(vec![
+                        Label::primary(file_id, span.start..span.end)
+                            .with_message(format!("cycle: {}", cycle_str)),
+                    ])
+                    .with_notes(vec![
+                        "type aliases cannot form cycles where they mutually reference each other"
+                            .to_string(),
+                    ])
+            }
         };
 
         term::emit_to_write_style(writer, &config, &files, &diagnostic)?;

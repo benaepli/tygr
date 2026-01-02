@@ -167,6 +167,11 @@ fn collect_free_type_vars(ty: &Type, set: &mut BTreeSet<TypeID>) {
             }
         }
         TypeKind::Con(_) => {}
+        TypeKind::AliasHead(_, args) => {
+            for a in args {
+                collect_free_type_vars(a, set);
+            }
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 type mylist = list
 
-let rec fold_right f, ls, x => match ls with
+let rec fold_right f, ls, x = match ls with
     | [] => x
     | hd::tl => f hd (fold_right f tl x)
 

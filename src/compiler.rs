@@ -107,9 +107,11 @@ pub fn compile_script(
         }
     }
 
+    let type_aliases = resolver.take_type_aliases();
     let name_table = resolver.into_name_table();
 
     let mut inferrer = Inferrer::new();
+    inferrer.set_type_aliases(type_aliases);
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {
@@ -215,8 +217,10 @@ pub fn compile_typed_program(
 
     let next_name = resolver.next_name_id();
     let next_type_name = resolver.next_type_name_id();
+    let type_aliases = resolver.take_type_aliases();
     let name_table = resolver.into_name_table();
     let mut inferrer = Inferrer::new();
+    inferrer.set_type_aliases(type_aliases);
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {

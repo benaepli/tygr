@@ -98,6 +98,7 @@ impl Resolved {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedAnnotationKind {
     Var(TypeName),
+    Alias(String),
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
@@ -212,40 +213,11 @@ type Scope = HashMap<String, Name>;
 type TypeScope = HashMap<String, TypeName>;
 
 #[derive(Debug, Clone)]
-struct TypeAliasEntry {
-    generics: Vec<TypeName>,
-    body: ResolvedAnnotation,
+pub struct TypeAliasEntry {
+    pub generics: Vec<TypeName>,
+    pub body: ResolvedAnnotation,
 }
 
-enum Partial {
-    Done(ResolvedAnnotation),
-    Alias {
-        name: String,
-        body: ResolvedAnnotation,
-        pending: Vec<TypeName>,
-        subs: HashMap<TypeName, ResolvedAnnotation>,
-        total: usize,
-    },
-}
-
-impl Partial {
-    fn finalize(self, span: Span) -> Result<ResolvedAnnotation, ResolutionError> {
-        match self {
-            Partial::Done(r) => Ok(r),
-            Partial::Alias {
-                name,
-                pending,
-                total,
-                ..
-            } => {
-                let provided = total - pending.len();
-                Err(ResolutionError::WrongNumberOfTypeArguments(
-                    name, total, provided, span,
-                ))
-            }
-        }
-    }
-}
 
 pub struct Resolver {
     scopes: Vec<Scope>,
@@ -323,39 +295,6 @@ impl Resolver {
         Ok(id)
     }
 
-    fn instantiate_alias(
-        template: &ResolvedAnnotation,
-        substitutions: &HashMap<TypeName, ResolvedAnnotation>,
-    ) -> ResolvedAnnotation {
-        let span = template.span;
-        let kind = match &template.kind {
-            ResolvedAnnotationKind::Var(id) => {
-                if let Some(replacement) = substitutions.get(id) {
-                    return replacement.clone();
-                }
-                ResolvedAnnotationKind::Var(*id)
-            }
-            ResolvedAnnotationKind::App(lhs, rhs) => ResolvedAnnotationKind::App(
-                Box::new(Self::instantiate_alias(lhs, substitutions)),
-                Box::new(Self::instantiate_alias(rhs, substitutions)),
-            ),
-            ResolvedAnnotationKind::Pair(lhs, rhs) => ResolvedAnnotationKind::Pair(
-                Box::new(Self::instantiate_alias(lhs, substitutions)),
-                Box::new(Self::instantiate_alias(rhs, substitutions)),
-            ),
-            ResolvedAnnotationKind::Lambda(param, ret) => ResolvedAnnotationKind::Lambda(
-                Box::new(Self::instantiate_alias(param, substitutions)),
-                Box::new(Self::instantiate_alias(ret, substitutions)),
-            ),
-            ResolvedAnnotationKind::Record(m) => ResolvedAnnotationKind::Record(
-                m.iter()
-                    .map(|(k, v)| (k.clone(), Self::instantiate_alias(v, substitutions)))
-                    .collect(),
-            ),
-        };
-        ResolvedAnnotation::new(kind, span)
-    }
-
     fn new_name(&mut self) -> Name {
         let id = self.next_id;
         self.next_id = Name(self.next_id.0 + 1);
@@ -368,109 +307,85 @@ impl Resolver {
         id
     }
 
-    fn resolve_annotation(&mut self, annot: Annotation) -> Result<Partial, ResolutionError> {
+    fn resolve_annotation(
+        &mut self,
+        annot: Annotation,
+    ) -> Result<ResolvedAnnotation, ResolutionError> {
         let span = annot.span;
 
         match annot.kind {
             AnnotationKind::Var(name) => {
+                // Check type scopes first (generic parameters)
                 for scope in self.type_scopes.iter().rev() {
                     if let Some(id) = scope.get(&name) {
-                        return Ok(Partial::Done(ResolvedAnnotation::new(
+                        return Ok(ResolvedAnnotation::new(
                             ResolvedAnnotationKind::Var(*id),
                             span,
-                        )));
+                        ));
                     }
                 }
 
+                // Check builtins
                 if let Some(id) = BUILTIN_TYPES.get(&name) {
-                    Ok(Partial::Done(ResolvedAnnotation::new(
+                    Ok(ResolvedAnnotation::new(
                         ResolvedAnnotationKind::Var(*id),
                         span,
-                    )))
-                } else if let Some(alias) = self.type_aliases.get(&name).cloned() {
-                    if alias.generics.is_empty() {
-                        Ok(Partial::Done(alias.body))
-                    } else {
-                        let total = alias.generics.len();
-                        Ok(Partial::Alias {
-                            name: name.clone(),
-                            body: alias.body,
-                            pending: alias.generics,
-                            subs: HashMap::new(),
-                            total,
-                        })
-                    }
+                    ))
+                } else if self.type_aliases.contains_key(&name) {
+                    // Emit Alias - expansion happens in type checker
+                    Ok(ResolvedAnnotation::new(
+                        ResolvedAnnotationKind::Alias(name),
+                        span,
+                    ))
                 } else if let Some(id) = self.variants.get(&name) {
-                    Ok(Partial::Done(ResolvedAnnotation::new(
+                    Ok(ResolvedAnnotation::new(
                         ResolvedAnnotationKind::Var(*id),
                         span,
-                    )))
+                    ))
                 } else {
                     Err(ResolutionError::VariableNotFound(name, span))
                 }
             }
 
-            AnnotationKind::App(lhs, rhs) => match self.resolve_annotation(*lhs)? {
-                Partial::Alias {
-                    name,
-                    body,
-                    mut pending,
-                    mut subs,
-                    total,
-                } => {
-                    let arg = self.resolve_annotation(*rhs)?.finalize(span)?;
-                    subs.insert(pending.remove(0), arg);
-
-                    if pending.is_empty() {
-                        Ok(Partial::Done(Self::instantiate_alias(&body, &subs)))
-                    } else {
-                        Ok(Partial::Alias {
-                            name,
-                            body,
-                            pending,
-                            subs,
-                            total,
-                        })
-                    }
-                }
-                Partial::Done(lhs) => {
-                    let rhs = self.resolve_annotation(*rhs)?.finalize(span)?;
-                    Ok(Partial::Done(ResolvedAnnotation::new(
-                        ResolvedAnnotationKind::App(Box::new(lhs), Box::new(rhs)),
-                        span,
-                    )))
-                }
-            },
+            AnnotationKind::App(lhs, rhs) => {
+                let r_lhs = self.resolve_annotation(*lhs)?;
+                let r_rhs = self.resolve_annotation(*rhs)?;
+                Ok(ResolvedAnnotation::new(
+                    ResolvedAnnotationKind::App(Box::new(r_lhs), Box::new(r_rhs)),
+                    span,
+                ))
+            }
 
             AnnotationKind::Pair(lhs, rhs) => {
-                let r_lhs = self.resolve_annotation(*lhs)?.finalize(span)?;
-                let r_rhs = self.resolve_annotation(*rhs)?.finalize(span)?;
-                Ok(Partial::Done(ResolvedAnnotation::new(
+                let r_lhs = self.resolve_annotation(*lhs)?;
+                let r_rhs = self.resolve_annotation(*rhs)?;
+                Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Pair(Box::new(r_lhs), Box::new(r_rhs)),
                     span,
-                )))
+                ))
             }
 
             AnnotationKind::Lambda(param, ret) => {
-                let r_param = self.resolve_annotation(*param)?.finalize(span)?;
-                let r_ret = self.resolve_annotation(*ret)?.finalize(span)?;
-                Ok(Partial::Done(ResolvedAnnotation::new(
+                let r_param = self.resolve_annotation(*param)?;
+                let r_ret = self.resolve_annotation(*ret)?;
+                Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Lambda(Box::new(r_param), Box::new(r_ret)),
                     span,
-                )))
+                ))
             }
+
             AnnotationKind::Record(m) => {
                 let mut resolved = HashMap::new();
                 for (k, v) in m.into_iter() {
                     if resolved.contains_key(&k) {
                         return Err(ResolutionError::DuplicateRecordField(k, span));
                     }
-                    resolved.insert(k, self.resolve_annotation(v)?.finalize(span)?);
+                    resolved.insert(k, self.resolve_annotation(v)?);
                 }
-                Ok(Partial::Done(ResolvedAnnotation::new(
+                Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Record(resolved),
                     span,
-                )))
+                ))
             }
         }
     }
@@ -490,7 +405,7 @@ impl Resolver {
         }
 
         self.type_scopes.push(type_scope);
-        let resolved_body = self.resolve_annotation(alias.body)?.finalize(alias.span)?;
+        let resolved_body = self.resolve_annotation(alias.body)?;
         self.type_scopes.pop();
 
         let entry = TypeAliasEntry {
@@ -543,7 +458,7 @@ impl Resolver {
             let name_id = self.new_name();
             self.name_origins.insert(name_id, name.clone());
             let resolved_annotation = match constructor.annotation {
-                Some(annot) => Some(self.resolve_annotation(annot)?.finalize(variant.span)?),
+                Some(annot) => Some(self.resolve_annotation(annot)?),
                 None => None,
             };
             constructors.insert(
@@ -598,8 +513,7 @@ impl Resolver {
 
         self.type_scopes.push(type_scope);
         let resolved_annot = if let Some(annot) = def.annotation {
-            let span = annot.span;
-            Some(self.resolve_annotation(annot)?.finalize(span)?)
+            Some(self.resolve_annotation(annot)?)
         } else {
             None
         };
@@ -637,8 +551,7 @@ impl Resolver {
                 self.type_scopes.push(new_type_scope);
 
                 let resolved_annot = if let Some(a) = annot {
-                    let a_span = a.span;
-                    Some(self.resolve_annotation(a)?.finalize(a_span)?)
+                    Some(self.resolve_annotation(a)?)
                 } else {
                     None
                 };
@@ -772,8 +685,7 @@ impl Resolver {
                 self.type_scopes.push(new_type_scope);
 
                 let resolved_annot = if let Some(a) = annot {
-                    let a_span = a.span;
-                    Some(self.resolve_annotation(a)?.finalize(a_span)?)
+                    Some(self.resolve_annotation(a)?)
                 } else {
                     None
                 };
@@ -991,8 +903,7 @@ impl Resolver {
 
             ExprKind::Lambda(param_pattern, body, annot) => {
                 let resolved_annot = if let Some(a) = annot {
-                    let span = a.span;
-                    Some(self.resolve_annotation(a)?.finalize(span)?)
+                    Some(self.resolve_annotation(a)?)
                 } else {
                     None
                 };
@@ -1129,6 +1040,10 @@ impl Resolver {
     /// for use in error formatting and debugging.
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
         crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.type_name_origins)
+    }
+
+    pub fn take_type_aliases(&mut self) -> HashMap<String, TypeAliasEntry> {
+        std::mem::take(&mut self.type_aliases)
     }
 
     pub fn next_name_id(&self) -> Name {
