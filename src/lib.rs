@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod builtin;
 pub mod compiler;
 pub mod custom;
+pub mod driver;
 pub mod interpreter;
 pub mod ir;
 pub mod lexer;

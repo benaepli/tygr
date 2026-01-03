@@ -1,187 +1,66 @@
+mod ast;
 pub mod format;
+pub use ast::*;
 
 use crate::lexer::{Token, TokenKind};
 use chumsky::input::BorrowInput;
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
-pub type Span = SimpleSpan<usize>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinOp {
-    And,
-    Or,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PatternKind {
-    Var(String),
-    Unit,
-    Pair(Box<Pattern>, Box<Pattern>),
-    Wildcard,
-    Cons(Box<Pattern>, Box<Pattern>),
-    EmptyList,
-    Record(Vec<(String, Pattern)>),
-    Constructor(String, Option<Box<Pattern>>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Pattern {
-    pub kind: PatternKind,
-    pub span: Span,
-}
-
-impl Pattern {
-    fn new(kind: PatternKind, span: Span) -> Self {
-        Pattern { kind, span }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AnnotationKind {
-    Var(String),
-    App(Box<Annotation>, Box<Annotation>),
-    Pair(Box<Annotation>, Box<Annotation>),
-    Lambda(Box<Annotation>, Box<Annotation>),
-    Record(Vec<(String, Annotation)>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Annotation {
-    pub kind: AnnotationKind,
-    pub span: Span,
-}
-
-impl Annotation {
-    fn new(kind: AnnotationKind, span: Span) -> Self {
-        Annotation { kind, span }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Generic {
-    pub name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeAlias {
-    pub name: String,
-    pub generics: Vec<Generic>,
-    pub body: Annotation,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Constructor {
-    pub annotation: Option<Annotation>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Variant {
-    pub name: String,
-    pub generics: Vec<Generic>,
-    pub constructors: Vec<(String, Constructor)>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ReplStatement {
-    Statement(Statement),
-    Variant(Variant),
-    Type(TypeAlias),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Definition {
-    pub name: String,
-    pub expr: Expr,
-    pub generics: Vec<Generic>,
-    pub annotation: Option<Annotation>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Declaration {
-    Def(Definition),
-    Variant(Variant),
-    Type(TypeAlias),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchBranch {
-    pub pattern: Pattern,
-    pub expr: Expr,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum StatementKind {
-    Let(Pattern, Box<Expr>, Vec<Generic>, Option<Annotation>),
-    Expr(Box<Expr>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Statement {
-    pub kind: StatementKind,
-    pub span: Span,
-}
-
-impl Statement {
-    fn new(kind: StatementKind, span: Span) -> Self {
-        Statement { kind, span }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Expr {
-    pub kind: ExprKind,
-    pub span: Span,
-}
-
-impl Expr {
-    pub(crate) fn new(kind: ExprKind, span: Span) -> Self {
-        Expr { kind, span }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExprKind {
-    Var(String),
-    Lambda(Pattern, Box<Expr>, Option<Annotation>), // Annotation is for the parameter type.
-    App(Box<Expr>, Box<Expr>),
-    Let(
-        Pattern,
-        Box<Expr>,
-        Box<Expr>,
-        Vec<Generic>,
-        Option<Annotation>,
-    ),
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Match(Box<Expr>, Vec<MatchBranch>),
-    Block(Vec<Statement>, Option<Box<Expr>>),
-
-    UnitLit,
-    PairLit(Box<Expr>, Box<Expr>),
-    IntLit(i64),
-    FloatLit(f64),
-    BoolLit(bool),
-    StringLit(String),
-    EmptyListLit,
-    RecordLit(Vec<(String, Expr)>),
-
-    BinOp(BinOp, Box<Expr>, Box<Expr>),
-    RecRecord(Vec<(String, Expr)>),
-    Cons(Box<Expr>, Box<Expr>),
-    FieldAccess(Box<Expr>, String),
-}
-
 fn ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, TokenKind>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
     select! { TokenKind::Identifier(s) => s }
+}
+
+fn path<'a, I>() -> impl Parser<'a, I, Path, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    let base = choice((
+        just(TokenKind::Crate)
+            .then_ignore(just(TokenKind::Cons))
+            .to(Some(PathBase::Crate)),
+        just(TokenKind::Super)
+            .then_ignore(just(TokenKind::Cons))
+            .repeated()
+            .at_least(1)
+            .count()
+            .map(|count| Some(PathBase::Super(count))),
+        empty().to(None),
+    ));
+
+    base.then(
+        ident()
+            .separated_by(just(TokenKind::Cons))
+            .at_least(1)
+            .collect::<Vec<_>>(),
+    )
+    .map_with(|(base, segments), e| Path {
+        base,
+        segments,
+        span: e.span(),
+    })
+}
+
+/// Helper to create a plain path from a single string (for operators, etc.)
+fn plain_path(name: String, span: Span) -> Path {
+    Path {
+        base: None,
+        segments: vec![name],
+        span,
+    }
+}
+
+fn visibility<'a, I>() -> impl Parser<'a, I, Visibility, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    just(TokenKind::Pub)
+        .to(Visibility::Public)
+        .or_not()
+        .map(|opt| opt.unwrap_or(Visibility::Private))
 }
 
 fn build_bin_op<'a, I, OP, P>(
@@ -197,7 +76,7 @@ where
         op_parser.then(next_parser).repeated(),
         |left, (op_name, right)| {
             let span = left.span.union(right.span);
-            let op_fn = Expr::new(ExprKind::Var(op_name), span);
+            let op_fn = Expr::new(ExprKind::Var(plain_path(op_name, span)), span);
             let func = Expr::new(ExprKind::App(Box::new(op_fn), Box::new(left)), span);
             Expr::new(ExprKind::App(Box::new(func), Box::new(right)), span)
         },
@@ -293,10 +172,7 @@ where
 {
     recursive(|annot| {
         let simple = {
-            let atom = select! {
-                TokenKind::Identifier(s) => AnnotationKind::Var(s),
-            }
-            .map_with(|kind, e| Annotation::new(kind, e.span()));
+            let atom = path().map_with(|p, e| Annotation::new(AnnotationKind::Var(p), e.span()));
 
             let field = ident()
                 .then_ignore(just(TokenKind::Colon))
@@ -462,23 +338,32 @@ where
             .then(just(TokenKind::Colon).ignore_then(expr.clone()).or_not())
             .map_with(|(name, value_opt), e| match value_opt {
                 Some(value) => (name, value),
-                None => (name.clone(), Expr::new(ExprKind::Var(name), e.span())),
+                None => {
+                    let span = e.span();
+                    (
+                        name.clone(),
+                        Expr::new(ExprKind::Var(plain_path(name, span)), span),
+                    )
+                }
             });
 
         let simple = {
-            let atom = choice((
+            let literals = choice((
                 select! {
                     TokenKind::Integer(i) => ExprKind::IntLit(i),
                     TokenKind::Float(d) => ExprKind::FloatLit(d),
                     TokenKind::Boolean(b) => ExprKind::BoolLit(b),
                     TokenKind::String(s) => ExprKind::StringLit(s.clone()),
-                    TokenKind::Identifier(s) => ExprKind::Var(s.clone()),
                 },
                 just(TokenKind::LeftBracket)
                     .then(just(TokenKind::RightBracket))
                     .to(ExprKind::EmptyListLit),
             ))
             .map_with(|kind, e| Expr::new(kind, e.span()));
+
+            let var_expr = path().map_with(|p, e| Expr::new(ExprKind::Var(p), e.span()));
+
+            let atom = choice((literals, var_expr));
 
             let items = expr
                 .clone()
@@ -541,19 +426,28 @@ where
         let unary = recursive(|unary| {
             choice((
                 just(TokenKind::Minus)
-                    .map_with(|_, e| Expr::new(ExprKind::Var("~".to_string()), e.span()))
+                    .map_with(|_, e| {
+                        let span = e.span();
+                        Expr::new(ExprKind::Var(plain_path("~".to_string(), span)), span)
+                    })
                     .then(unary.clone())
                     .map_with(|(op_fn, val), e| {
                         Expr::new(ExprKind::App(Box::new(op_fn), Box::new(val)), e.span())
                     }),
                 just(TokenKind::MinusDot)
-                    .map_with(|_, e| Expr::new(ExprKind::Var("~.".to_string()), e.span()))
+                    .map_with(|_, e| {
+                        let span = e.span();
+                        Expr::new(ExprKind::Var(plain_path("~.".to_string(), span)), span)
+                    })
                     .then(unary.clone())
                     .map_with(|(op_fn, val), e| {
                         Expr::new(ExprKind::App(Box::new(op_fn), Box::new(val)), e.span())
                     }),
                 just(TokenKind::Bang)
-                    .map_with(|_, e| Expr::new(ExprKind::Var("!".to_string()), e.span()))
+                    .map_with(|_, e| {
+                        let span = e.span();
+                        Expr::new(ExprKind::Var(plain_path("!".to_string(), span)), span)
+                    })
                     .then(unary.clone())
                     .map_with(|(op_fn, val), e| {
                         Expr::new(ExprKind::App(Box::new(op_fn), Box::new(val)), e.span())
@@ -633,7 +527,7 @@ where
             .map(|(left, op_right_opt)| match op_right_opt {
                 Some((op_name, right)) => {
                     let span = left.span.union(right.span);
-                    let op_fn = Expr::new(ExprKind::Var(op_name), span);
+                    let op_fn = Expr::new(ExprKind::Var(plain_path(op_name, span)), span);
                     let func = Expr::new(ExprKind::App(Box::new(op_fn), Box::new(left)), span);
                     Expr::new(ExprKind::App(Box::new(func), Box::new(right)), span)
                 }
@@ -773,24 +667,26 @@ where
     })
 }
 
-fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind>>>
+fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
-    just(TokenKind::Type)
-        .ignore_then(ident())
+    visibility()
+        .then_ignore(just(TokenKind::Type))
+        .then(ident())
         .then(generics())
         .then_ignore(just(TokenKind::Equal))
         .then(annotation())
-        .map_with(|((name, generics), body), extra| TypeAlias {
+        .map_with(|(((vis, name), generics), body), extra| TypeAlias {
             name,
+            vis,
             generics,
             body,
             span: extra.span(),
         })
 }
 
-fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind>>>
+fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
@@ -810,8 +706,9 @@ where
             )
         });
 
-    just(TokenKind::Enum)
-        .ignore_then(ident())
+    visibility()
+        .then_ignore(just(TokenKind::Enum))
+        .then(ident())
         .then(generics())
         .then_ignore(just(TokenKind::Equal))
         .then_ignore(just(TokenKind::Pipe).or_not())
@@ -821,8 +718,9 @@ where
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
-        .map_with(|((name, generics), constructors), extra| Variant {
+        .map_with(|(((vis, name), generics), constructors), extra| Variant {
             name,
+            vis,
             generics,
             constructors,
             span: extra.span(),
@@ -856,8 +754,9 @@ where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
     P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
 {
-    just(TokenKind::Def)
-        .ignore_then(ident())
+    visibility()
+        .then_ignore(just(TokenKind::Def))
+        .then(ident())
         .then(generics())
         .then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
         .then(
@@ -877,7 +776,7 @@ where
         )
         .then_ignore(just(TokenKind::Equal))
         .then(expr_parser)
-        .map_with(|((((name, generics), annot), params_opt), val), e| {
+        .map_with(|(((((vis, name), generics), annot), params_opt), val), e| {
             let span = e.span();
             let value_expr = if let Some(params) = params_opt {
                 let mut iter = params.into_iter().rev();
@@ -892,11 +791,28 @@ where
 
             Definition {
                 name,
+                vis,
                 expr: value_expr,
                 generics,
                 annotation: annot,
                 span,
             }
+        })
+}
+
+fn use_decl<'a, I>() -> impl Parser<'a, I, UseDecl, extra::Err<Rich<'a, TokenKind>>> + Clone
+where
+    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+{
+    visibility()
+        .then_ignore(just(TokenKind::Use))
+        .then(path())
+        .then(just(TokenKind::As).ignore_then(ident()).or_not())
+        .map_with(|((vis, path), alias), e| UseDecl {
+            path,
+            alias,
+            vis,
+            span: e.span(),
         })
 }
 
@@ -915,11 +831,31 @@ pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'
 where
     I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
 {
-    choice((
-        type_alias().map(Declaration::Type),
-        variant().map(Declaration::Variant),
-        def(expr()).map(Declaration::Def),
-    ))
+    recursive(|decl| {
+        let module_decl = visibility()
+            .then_ignore(just(TokenKind::Mod))
+            .then(ident())
+            .then(
+                decl.repeated()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(TokenKind::LeftBrace), just(TokenKind::RightBrace))
+                    .or_not(),
+            )
+            .map_with(|((vis, name), body), e| ModuleDecl {
+                name,
+                vis,
+                body,
+                span: e.span(),
+            });
+
+        choice((
+            use_decl().map(Declaration::Use),
+            module_decl.map(Declaration::Module),
+            type_alias().map(Declaration::Type),
+            variant().map(Declaration::Variant),
+            def(expr()).map(Declaration::Def),
+        ))
+    })
 }
 
 pub fn script<'a, I>() -> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind>>>

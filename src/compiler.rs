@@ -42,6 +42,7 @@ fn split_program(decls: Vec<Declaration>) -> (Vec<Definition>, Vec<Variant>, Vec
             Declaration::Def(d) => definitions.push(d),
             Declaration::Variant(v) => variants.push(v),
             Declaration::Type(t) => type_aliases.push(t),
+            _ => continue,
         }
     }
 

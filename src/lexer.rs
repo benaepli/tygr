@@ -97,6 +97,12 @@ pub enum TokenKind {
     Type,
     Enum,
     Def,
+    Pub,
+    Use,
+    Mod,
+    Crate,
+    Super,
+    As,
 }
 
 impl fmt::Display for TokenKind {
@@ -166,6 +172,12 @@ impl fmt::Display for TokenKind {
             TokenKind::Type => write!(f, "type"),
             TokenKind::Enum => write!(f, "enum"),
             TokenKind::Def => write!(f, "def"),
+            TokenKind::Pub => write!(f, "pub"),
+            TokenKind::Use => write!(f, "use"),
+            TokenKind::Mod => write!(f, "mod"),
+            TokenKind::Crate => write!(f, "crate"),
+            TokenKind::Super => write!(f, "super"),
+            TokenKind::As => write!(f, "as"),
         }
     }
 }
@@ -185,6 +197,12 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "type" => TokenKind::Type,
     "enum" => TokenKind::Enum,
     "def" => TokenKind::Def,
+    "pub" => TokenKind::Pub,
+    "use" => TokenKind::Use,
+    "mod" => TokenKind::Mod,
+    "crate" => TokenKind::Crate,
+    "super" => TokenKind::Super,
+    "as" => TokenKind::As,
 };
 
 fn is_special_char(ch: char) -> bool {
