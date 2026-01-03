@@ -3,8 +3,8 @@ pub use ast::*;
 
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, Definition, Expr, ExprKind, Generic, Pattern, PatternKind, Span,
-    Statement, StatementKind, TypeAlias, Variant,
+    Annotation, AnnotationKind, Definition, Expr, ExprKind, Generic, Pattern, PatternKind,
+    SourceId, Span, Statement, StatementKind, TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -99,7 +99,11 @@ impl Resolver {
         if self.scopes[0].contains_key(name) {
             return Err(ResolutionError::DuplicateBinding(
                 name.to_string(),
-                (0..0).into(),
+                Span {
+                    context: SourceId::SYNTHETIC,
+                    start: 0,
+                    end: 0,
+                },
             ));
         }
         let id = self.new_name();

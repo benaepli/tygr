@@ -6,7 +6,7 @@ use crate::analysis::resolver::{ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
-use crate::parser::{ReplStatement, make_input};
+use crate::parser::{ReplStatement, SourceId, Span, make_input};
 use crate::visualize::typed::TypedAstVisualizer;
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
@@ -206,14 +206,21 @@ impl Repl {
     pub fn process_line(&mut self, source: &str, writer: &mut impl WriteColor) {
         let name = "<repl>";
 
-        let mut lexer = Lexer::new(source);
+        let mut lexer = Lexer::new(source, SourceId::SYNTHETIC);
         let (tokens, lex_errors) = lexer.collect_all();
         if !lex_errors.is_empty() {
             let _ = lexer::format::report_errors(writer, source, &lex_errors, name);
             return;
         }
 
-        let input = make_input((0..source.len()).into(), &tokens);
+        let input = make_input(
+            Span {
+                context: SourceId::SYNTHETIC,
+                start: 0,
+                end: source.len(),
+            },
+            &tokens,
+        );
         let Ok(decl) = parser::repl().parse(input).into_result().map_err(|e| {
             let _ = parser::format::report_errors(writer, source, e.iter(), name);
         }) else {

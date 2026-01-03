@@ -1,6 +1,6 @@
 pub mod format;
 
-use crate::parser::Span;
+use crate::parser::{SourceId, Span};
 use phf_macros::phf_map;
 use std::fmt;
 use std::iter::Peekable;
@@ -246,14 +246,16 @@ pub enum LexError {
 pub struct Lexer<'a> {
     input: Peekable<Chars<'a>>,
     position: usize,
+    source: SourceId,
 }
 
 impl<'a> Lexer<'a> {
     /// Creates a new lexer for the given input string.
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str, source: SourceId) -> Self {
         Self {
             input: input.chars().peekable(),
             position: 0,
+            source,
         }
     }
 
@@ -516,7 +518,7 @@ impl<'a> Iterator for Lexer<'a> {
             Token::new(
                 kind,
                 Span {
-                    context: (),
+                    context: self.source,
                     start,
                     end,
                 },

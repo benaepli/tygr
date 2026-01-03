@@ -9,7 +9,7 @@ use crate::analysis::resolver::{Name, Resolver, TypeName};
 use crate::ir::closure::{Converter, Program, VariantDef};
 use crate::lexer::Lexer;
 use crate::parser::{
-    Declaration, Definition, ReplStatement, Statement, TypeAlias, Variant, parse_program,
+    Declaration, Definition, ReplStatement, SourceId, Statement, TypeAlias, Variant, parse_program,
     parse_script,
 };
 use crate::{lexer, parser};
@@ -54,7 +54,7 @@ pub fn compile_script(
     name: &str,
     writer: &mut impl WriteStyle,
 ) -> Result<(Vec<TypedStatement>, NameTable), anyhow::Error> {
-    let mut lexer = Lexer::new(input);
+    let mut lexer = Lexer::new(input, SourceId::SYNTHETIC);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(writer, input, &errors, name)?;
     if !errors.is_empty() {
@@ -164,7 +164,7 @@ pub fn compile_typed_program(
     name: &str,
     writer: &mut impl WriteStyle,
 ) -> Result<TypedProgram, anyhow::Error> {
-    let mut lexer = Lexer::new(input);
+    let mut lexer = Lexer::new(input, SourceId::SYNTHETIC);
     let (lexed, errors) = lexer.collect_all();
     lexer::format::report_errors(writer, input, &errors, name)?;
     if !errors.is_empty() {

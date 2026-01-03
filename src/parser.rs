@@ -5,18 +5,17 @@ pub use ast::*;
 use crate::lexer::{Token, TokenKind};
 use chumsky::input::BorrowInput;
 use chumsky::prelude::*;
-use chumsky::span::SimpleSpan;
 
-fn ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     select! { TokenKind::Identifier(s) => s }
 }
 
-fn path<'a, I>() -> impl Parser<'a, I, Path, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn path<'a, I>() -> impl Parser<'a, I, Path, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     let base = choice((
         just(TokenKind::Crate)
@@ -53,9 +52,9 @@ fn plain_path(name: String, span: Span) -> Path {
     }
 }
 
-fn visibility<'a, I>() -> impl Parser<'a, I, Visibility, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn visibility<'a, I>() -> impl Parser<'a, I, Visibility, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     just(TokenKind::Pub)
         .to(Visibility::Public)
@@ -66,11 +65,11 @@ where
 fn build_bin_op<'a, I, OP, P>(
     op_parser: OP,
     next_parser: P,
-) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone
+) -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
-    OP: Parser<'a, I, String, extra::Err<Rich<'a, TokenKind>>> + Clone,
-    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
+    OP: Parser<'a, I, String, extra::Err<Rich<'a, TokenKind, Span>>> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone,
 {
     next_parser.clone().foldl(
         op_parser.then(next_parser).repeated(),
@@ -83,9 +82,9 @@ where
     )
 }
 
-fn pattern<'a, I>() -> impl Parser<'a, I, Pattern, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn pattern<'a, I>() -> impl Parser<'a, I, Pattern, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     recursive(|pat| {
         let items = pat
@@ -166,9 +165,9 @@ where
     })
 }
 
-fn annotation<'a, I>() -> impl Parser<'a, I, Annotation, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn annotation<'a, I>() -> impl Parser<'a, I, Annotation, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     recursive(|annot| {
         let simple = {
@@ -239,9 +238,9 @@ where
     })
 }
 
-fn generics<'a, I>() -> impl Parser<'a, I, Vec<Generic>, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn generics<'a, I>() -> impl Parser<'a, I, Vec<Generic>, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     just(TokenKind::LeftBracket)
         .ignore_then(ident())
@@ -258,9 +257,9 @@ where
 }
 
 fn param<'a, I>()
--> impl Parser<'a, I, (Pattern, Option<Annotation>), extra::Err<Rich<'a, TokenKind>>> + Clone
+-> impl Parser<'a, I, (Pattern, Option<Annotation>), extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     pattern().then(just(TokenKind::Colon).ignore_then(annotation()).or_not())
 }
@@ -271,11 +270,11 @@ fn let_binding<'a, I, P>(
     'a,
     I,
     (Pattern, Expr, Vec<Generic>, Option<Annotation>),
-    extra::Err<Rich<'a, TokenKind>>,
+    extra::Err<Rich<'a, TokenKind, Span>>,
 > + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
-    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone,
 {
     just(TokenKind::Let)
         .ignore_then(just(TokenKind::Rec).or_not())
@@ -329,9 +328,9 @@ where
         )
 }
 
-fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn expr<'a, I>() -> impl Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     recursive(|expr| {
         let field = ident()
@@ -667,9 +666,9 @@ where
     })
 }
 
-fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     visibility()
         .then_ignore(just(TokenKind::Type))
@@ -686,9 +685,9 @@ where
         })
 }
 
-fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn variant<'a, I>() -> impl Parser<'a, I, Variant, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     let constructor = ident()
         .then(
@@ -729,10 +728,10 @@ where
 
 fn statement<'a, I, P>(
     expr_parser: P,
-) -> impl Parser<'a, I, Statement, extra::Err<Rich<'a, TokenKind>>> + Clone
+) -> impl Parser<'a, I, Statement, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
-    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone,
 {
     choice((
         expr_parser
@@ -749,10 +748,10 @@ where
 
 fn def<'a, I, P>(
     expr_parser: P,
-) -> impl Parser<'a, I, Definition, extra::Err<Rich<'a, TokenKind>>> + Clone
+) -> impl Parser<'a, I, Definition, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
-    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind>>> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
+    P: Parser<'a, I, Expr, extra::Err<Rich<'a, TokenKind, Span>>> + Clone,
 {
     visibility()
         .then_ignore(just(TokenKind::Def))
@@ -800,9 +799,9 @@ where
         })
 }
 
-fn use_decl<'a, I>() -> impl Parser<'a, I, UseDecl, extra::Err<Rich<'a, TokenKind>>> + Clone
+fn use_decl<'a, I>() -> impl Parser<'a, I, UseDecl, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     visibility()
         .then_ignore(just(TokenKind::Use))
@@ -816,9 +815,9 @@ where
         })
 }
 
-pub fn repl<'a, I>() -> impl Parser<'a, I, ReplStatement, extra::Err<Rich<'a, TokenKind>>>
+pub fn repl<'a, I>() -> impl Parser<'a, I, ReplStatement, extra::Err<Rich<'a, TokenKind, Span>>>
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     choice((
         type_alias().map(ReplStatement::Type),
@@ -827,9 +826,9 @@ where
     ))
 }
 
-pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind>>>
+pub fn declaration<'a, I>() -> impl Parser<'a, I, Declaration, extra::Err<Rich<'a, TokenKind, Span>>>
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     recursive(|decl| {
         let module_decl = visibility()
@@ -858,16 +857,16 @@ where
     })
 }
 
-pub fn script<'a, I>() -> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind>>>
+pub fn script<'a, I>() -> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind, Span>>>
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     repl().repeated().collect::<Vec<_>>().then_ignore(end())
 }
 
-pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind>>>
+pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind, Span>>>
 where
-    I: BorrowInput<'a, Token = TokenKind, Span = SimpleSpan> + Clone,
+    I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     declaration()
         .repeated()
@@ -876,22 +875,30 @@ where
 }
 
 pub fn make_input(
-    eoi: SimpleSpan,
+    eoi: Span,
     tokens: &[Token],
-) -> impl BorrowInput<'_, Token = TokenKind, Span = SimpleSpan> + Clone {
+) -> impl BorrowInput<'_, Token = TokenKind, Span = Span> + Clone {
     tokens.map(eoi, |t| (&t.kind, &t.span))
 }
 
-pub fn parse_script(tokens: &'_ [Token]) -> ParseResult<Vec<ReplStatement>, Rich<'_, TokenKind>> {
+pub fn parse_script(tokens: &'_ [Token]) -> ParseResult<Vec<ReplStatement>, Rich<'_, TokenKind, Span>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
-    let input = make_input((0..len).into(), tokens);
+    let source = tokens
+        .first()
+        .map(|t| t.span.context())
+        .unwrap_or(SourceId::SYNTHETIC);
+    let input = make_input(Span::new(source, 0..len), tokens);
 
     script().parse(input)
 }
 
-pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind>> {
+pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind, Span>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
-    let input = make_input((0..len).into(), tokens);
+    let source = tokens
+        .first()
+        .map(|t| t.span.context())
+        .unwrap_or(SourceId::SYNTHETIC);
+    let input = make_input(Span::new(source, 0..len), tokens);
 
     program().parse(input)
 }

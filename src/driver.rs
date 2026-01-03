@@ -1,7 +1,7 @@
 use crate::lexer::TokenKind;
 use crate::lexer::{self, LexError};
 use crate::parser;
-use crate::parser::{Declaration, Span};
+use crate::parser::{Declaration, SourceId, Span};
 use bimap::BiMap;
 use chumsky::error::Rich;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub enum LoadError {
     #[error("Parse errors")]
     ParseErrors {
         file_path: VfsPath,
-        errors: Vec<Rich<'static, TokenKind>>,
+        errors: Vec<Rich<'static, TokenKind, Span>>,
         module_span: Option<Span>,
     },
 
@@ -80,12 +80,14 @@ pub struct ModuleData {
     pub ast: Vec<Declaration>,
     pub file_path: VfsPath,
     pub scope: DfsScope,
+    pub source_id: SourceId,
 }
 
 #[derive(Debug)]
 struct LoadState {
     modules: HashMap<ModuleId, ModuleData>,
     next_id: ModuleId,
+    next_source_id: SourceId,
     paths: BiMap<Vec<String>, ModuleId>,
     dfs_counter: u32,
 }
@@ -96,6 +98,12 @@ impl LoadState {
         self.next_id.0 += 1;
         current
     }
+
+    pub fn new_source_id(&mut self) -> SourceId {
+        let current = self.next_source_id;
+        self.next_source_id.0 += 1;
+        current
+    }
 }
 
 impl Default for LoadState {
@@ -103,6 +111,7 @@ impl Default for LoadState {
         Self {
             modules: HashMap::new(),
             next_id: ModuleId(0),
+            next_source_id: SourceId(1), // Start at 1, as SourceId(0) is reserved for SYNTHETIC
             paths: BiMap::new(),
             dfs_counter: 0,
         }
@@ -117,6 +126,7 @@ fn load_inline_module(
     parent: Option<ModuleId>,
     parent_span: Option<Span>,
     ast: Vec<Declaration>,
+    source_id: SourceId,
     depth: usize,
 ) -> Result<ModuleId, LoadError> {
     if depth >= RECURSION_LIMIT {
@@ -160,6 +170,7 @@ fn load_inline_module(
                             Some(id),
                             Some(*span),
                             nested_ast.clone(),
+                            source_id, // Inline modules share the same source_id as their parent
                             depth + 1,
                         )?;
                     }
@@ -199,6 +210,7 @@ fn load_inline_module(
         ast,
         file_path: file_path.clone(),
         scope: DfsScope { entry, exit },
+        source_id,
     };
     state.modules.insert(id, data);
     state.paths.insert(logical_path.clone(), id);
@@ -214,6 +226,8 @@ fn load_after_root(
     parent_span: Option<Span>,
     depth: usize,
 ) -> Result<ModuleId, LoadError> {
+    let source_id = state.new_source_id();
+
     let mut content = String::new();
     let mut reader = file_path.open_file().map_err(|e| LoadError::VfsError {
         file_path: file_path.clone(),
@@ -228,7 +242,7 @@ fn load_after_root(
             module_span: parent_span,
         })?;
 
-    let mut lexer = lexer::Lexer::new(&content);
+    let mut lexer = lexer::Lexer::new(&content, source_id);
     let (tokens, lex_errors) = lexer.collect_all();
     if !lex_errors.is_empty() {
         return Err(LoadError::LexErrors {
@@ -265,6 +279,7 @@ fn load_after_root(
         parent,
         parent_span,
         ast,
+        source_id,
         depth,
     )
 }

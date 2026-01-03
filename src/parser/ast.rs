@@ -1,7 +1,14 @@
 use chumsky::prelude::SimpleSpan;
 use std::fmt;
 
-pub type Span = SimpleSpan<usize>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SourceId(pub usize);
+
+impl SourceId {
+    pub const SYNTHETIC: SourceId = SourceId(0);
+}
+
+pub type Span = SimpleSpan<usize, SourceId>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {

@@ -1,4 +1,5 @@
 use crate::lexer::TokenKind;
+use crate::parser::Span;
 use chumsky::prelude::Rich;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFiles;
@@ -12,7 +13,7 @@ pub fn report_errors<'a, F>(
     filename: &str,
 ) -> Result<(), codespan_reporting::files::Error>
 where
-    F: Iterator<Item = &'a Rich<'a, TokenKind>>,
+    F: Iterator<Item = &'a Rich<'a, TokenKind, Span>>,
 {
     let mut files = SimpleFiles::new();
     let file_id = files.add(filename, source);
