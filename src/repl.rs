@@ -234,8 +234,20 @@ impl Repl {
 
         match decl {
             ReplStatement::Type(t) => {
-                if let Err(e) = self.resolver.resolve_type_alias(t) {
-                    let _ = report_resolution_errors(writer, source, &[e], name);
+                let res = self
+                    .resolver
+                    .declare_type_alias(&t)
+                    .and_then(|_| self.resolver.define_type_alias(t));
+
+                match res {
+                    Err(e) => {
+                        let _ = report_resolution_errors(writer, source, &[e], name);
+                    }
+                    Ok(resolved) => {
+                        if let Err(e) = self.inferrer.register_alias(resolved) {
+                            let _ = report_type_errors(writer, source, &[e], name, &name_table);
+                        }
+                    }
                 }
             }
 

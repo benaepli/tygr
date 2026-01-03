@@ -59,9 +59,6 @@ pub enum LoadError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CrateId(pub usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModuleId(pub usize); // Module IDs are unique within a crate, but not globally
 
 #[derive(Debug, Clone)]

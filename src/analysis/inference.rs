@@ -2,8 +2,8 @@ use crate::analysis::dependencies::is_self_recursive;
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{
     Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind, ResolvedDefinition, ResolvedKind,
-    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, ResolvedStatement, ResolvedVariant,
-    TypeAliasEntry, TypeName,
+    ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind, ResolvedStatement,
+    ResolvedTypeAlias, ResolvedVariant, TypeName,
 };
 use crate::builtin::{
     BOOL_TYPE, BuiltinFn, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
@@ -64,7 +64,7 @@ pub enum TypeKind {
     Var(TypeID),
     Con(TypeName),
     App(Rc<Type>, Rc<Type>),
-    AliasHead(String, Vec<Rc<Type>>), // alias name and args applied so far
+    AliasHead(TypeName, Vec<Rc<Type>>), // alias name and args applied so far
 
     Function(Rc<Type>, Rc<Type>),
     Pair(Rc<Type>, Rc<Type>),
@@ -261,13 +261,13 @@ pub enum TypeError {
     InvalidConstructorType(Span),
 
     #[error("unknown type alias: {0}")]
-    UnknownTypeAlias(String, Span),
+    UnknownTypeAlias(TypeName, Span),
 
     #[error("kind mismatch: expected {1:?}, found {0:?}")]
     KindMismatch(Rc<Kind>, Rc<Kind>, Span),
 
     #[error("type alias cycle detected: {0:?}")]
-    AliasCycle(Vec<String>, Span),
+    AliasCycle(Vec<TypeName>, Span),
 }
 
 pub struct Inferrer {
@@ -283,9 +283,9 @@ pub struct Inferrer {
 
     custom_schemes: HashMap<Name, TypeScheme>,
 
-    type_aliases: HashMap<String, TypeAliasEntry>,
+    type_aliases: HashMap<TypeName, ResolvedTypeAlias>,
 
-    alias_expansion_stack: Vec<String>,
+    alias_expansion_stack: Vec<TypeName>,
 }
 
 impl Default for Inferrer {
@@ -315,8 +315,9 @@ impl Inferrer {
         }
     }
 
-    pub fn set_type_aliases(&mut self, aliases: HashMap<String, TypeAliasEntry>) {
-        self.type_aliases = aliases;
+    pub fn register_alias(&mut self, alias: ResolvedTypeAlias) -> Result<(), TypeError> {
+        self.type_aliases.insert(alias.name, alias);
+        Ok(())
     }
 
     pub fn register_custom_type(&mut self, name: Name, scheme: TypeScheme) {

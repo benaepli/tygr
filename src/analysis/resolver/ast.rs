@@ -1,6 +1,8 @@
 use crate::builtin::BuiltinFn;
-use crate::driver::{CrateId, ModuleId};
+use crate::driver::ModuleId;
 use crate::parser::{BinOp, Span, Visibility};
+use petgraph::graph::DiGraph;
+use petgraph::prelude::NodeIndex;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -95,7 +97,7 @@ impl Resolved {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedAnnotationKind {
     Var(TypeName),
-    Alias(String),
+    Alias(TypeName),
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
@@ -187,7 +189,8 @@ impl ResolvedKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeAliasEntry {
+pub struct ResolvedTypeAlias {
+    pub name: TypeName,
     pub generics: Vec<TypeName>,
     pub body: ResolvedAnnotation,
 }
@@ -197,28 +200,51 @@ pub struct ResolvedModuleData {
     pub id: ModuleId,
     pub parent: Option<ModuleId>,
 
-    pub definitions: HashMap<String, (Resolution, Visibility)>,
-    pub modules: HashMap<String, (Resolution, Visibility)>,
-    pub types: HashMap<String, (Resolution, Visibility)>,
+    pub definitions: HashMap<String, (CrateId, Name, Visibility)>,
+    pub types: HashMap<String, (CrateId, TypeName, Visibility)>,
+    pub modules: HashMap<String, (CrateId, ModuleId, Visibility)>,
 }
+
+pub type CrateId = NodeIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resolution {
-    Def(Name),
-    Module(ModuleId),
-    Type(TypeName),
-    Crate(CrateId),
+    Def(CrateId, Name),
+    Type(CrateId, TypeName),
+    Module(CrateId, ModuleId),
 }
 
 pub struct CrateGraph {
-    pub crates: HashMap<CrateId, DefMap>,
-    pub dependencies: HashMap<CrateId, Vec<(String, CrateId)>>,
+    pub graph: DiGraph<CrateDefMap, String>, // Edges contain the dependency alias
+    pub index_map: HashMap<NodeIndex, String>, // The canonical names of crates
 }
 
-pub struct DefMap {
+impl CrateGraph {
+    pub fn new() -> Self {
+        Self {
+            graph: DiGraph::new(),
+            index_map: HashMap::new(),
+        }
+    }
+
+    pub fn add_crate(&mut self, name: &str, data: CrateDefMap) -> CrateId {
+        let idx = self.graph.add_node(data);
+        self.index_map.insert(idx, name.to_string());
+        idx
+    }
+
+    pub fn add_dependency(&mut self, from: CrateId, to: CrateId, alias: String) {
+        self.graph.add_edge(from, to, alias);
+    }
+}
+
+pub struct CrateDefMap {
     pub crate_id: CrateId,
     pub modules: Vec<ResolvedModuleData>,
     pub root: ModuleId,
 
     pub extern_prelude: HashMap<String, CrateId>,
+
+    pub definitions: HashMap<Name, ResolvedDefinition>,
+    pub types: HashMap<TypeName>,
 }

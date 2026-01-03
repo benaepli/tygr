@@ -1,10 +1,10 @@
 mod ast;
 pub use ast::*;
 
-use crate::builtin::{BuiltinFn, BUILTINS, BUILTIN_TYPES, TYPE_BASE};
+use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::parser::{
-    Annotation, AnnotationKind, Definition, Expr, ExprKind, Generic, Pattern, PatternKind,
-    Span, Statement, StatementKind, TypeAlias, Variant,
+    Annotation, AnnotationKind, Definition, Expr, ExprKind, Generic, Pattern, PatternKind, Span,
+    Statement, StatementKind, TypeAlias, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -40,7 +40,7 @@ pub struct Resolver {
     type_scopes: Vec<TypeScope>,
     next_type: TypeName,
 
-    type_aliases: HashMap<String, TypeAliasEntry>,
+    type_aliases: HashMap<String, TypeName>,
 
     variants: HashMap<String, TypeName>,
     constructors: HashMap<String, (TypeName, Name)>,
@@ -144,10 +144,9 @@ impl Resolver {
                         ResolvedAnnotationKind::Var(*id),
                         span,
                     ))
-                } else if self.type_aliases.contains_key(&name) {
-                    // Emit Alias - expansion happens in type checker
+                } else if let Some(id) = self.type_aliases.get(&name) {
                     Ok(ResolvedAnnotation::new(
-                        ResolvedAnnotationKind::Alias(name),
+                        ResolvedAnnotationKind::Alias(*id),
                         span,
                     ))
                 } else if let Some(id) = self.variants.get(&name) {
@@ -203,10 +202,25 @@ impl Resolver {
         }
     }
 
-    pub fn resolve_type_alias(&mut self, alias: TypeAlias) -> Result<(), ResolutionError> {
+    pub fn declare_type_alias(&mut self, alias: &TypeAlias) -> Result<TypeName, ResolutionError> {
         if self.type_aliases.contains_key(&alias.name) {
-            return Err(ResolutionError::DuplicateTypeAlias(alias.name, alias.span));
+            return Err(ResolutionError::DuplicateTypeAlias(alias.name.clone(), alias.span));
         }
+
+        let id = self.new_id();
+        self.type_aliases.insert(alias.name.clone(), id);
+        self.type_name_origins.insert(id, alias.name.clone());
+        Ok(id)
+    }
+
+    pub fn define_type_alias(
+        &mut self,
+        alias: TypeAlias,
+    ) -> Result<ResolvedTypeAlias, ResolutionError> {
+        let id = *self
+            .type_aliases
+            .get(&alias.name)
+            .ok_or_else(|| ResolutionError::VariableNotFound(alias.name.clone(), alias.span))?;
 
         let mut type_scope = HashMap::new();
         let mut generic_ids = Vec::new();
@@ -221,13 +235,11 @@ impl Resolver {
         let resolved_body = self.resolve_annotation(alias.body)?;
         self.type_scopes.pop();
 
-        let entry = TypeAliasEntry {
+        Ok(ResolvedTypeAlias {
+            name: id,
             generics: generic_ids,
             body: resolved_body,
-        };
-
-        self.type_aliases.insert(alias.name, entry);
-        Ok(())
+        })
     }
 
     pub fn declare_variant(&mut self, variant: &Variant) -> Result<(), ResolutionError> {
@@ -853,10 +865,6 @@ impl Resolver {
     /// for use in error formatting and debugging.
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
         crate::analysis::name_table::NameTable::with_maps(self.name_origins, self.type_name_origins)
-    }
-
-    pub fn take_type_aliases(&mut self) -> HashMap<String, TypeAliasEntry> {
-        std::mem::take(&mut self.type_aliases)
     }
 
     pub fn next_name_id(&self) -> Name {

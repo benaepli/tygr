@@ -42,7 +42,7 @@ fn split_program(decls: Vec<Declaration>) -> (Vec<Definition>, Vec<Variant>, Vec
             Declaration::Def(d) => definitions.push(d),
             Declaration::Variant(v) => variants.push(v),
             Declaration::Type(t) => type_aliases.push(t),
-            _ => continue,
+            _ => {}
         }
     }
 
@@ -78,13 +78,20 @@ pub fn compile_script(
             return Err(anyhow!("resolution error"));
         }
     }
+    for alias in &aliases {
+        if let Err(e) = resolver.declare_type_alias(alias) {
+            report_resolution_errors(writer, input, &[e], name)?;
+            return Err(anyhow!("resolution error"));
+        }
+    }
+    let mut resolved_aliases = Vec::new();
     for alias in aliases {
-        match resolver.resolve_type_alias(alias) {
+        match resolver.define_type_alias(alias) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
             }
-            Ok(r) => r,
+            Ok(r) => resolved_aliases.push(r),
         }
     }
     let mut resolved_variants = Vec::new();
@@ -108,11 +115,18 @@ pub fn compile_script(
         }
     }
 
-    let type_aliases = resolver.take_type_aliases();
     let name_table = resolver.into_name_table();
 
     let mut inferrer = Inferrer::new();
-    inferrer.set_type_aliases(type_aliases);
+    for alias in resolved_aliases {
+        match inferrer.register_alias(alias) {
+            Err(e) => {
+                report_type_errors(writer, input, &[e], name, &name_table)?;
+                return Err(anyhow!("type inference error"));
+            }
+            Ok(_) => {}
+        }
+    }
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {
@@ -179,13 +193,20 @@ pub fn compile_typed_program(
             return Err(anyhow!("resolution error"));
         }
     }
+    for alias in &aliases {
+        if let Err(e) = resolver.declare_type_alias(alias) {
+            report_resolution_errors(writer, input, &[e], name)?;
+            return Err(anyhow!("resolution error"));
+        }
+    }
+    let mut resolved_aliases = Vec::new();
     for alias in aliases {
-        match resolver.resolve_type_alias(alias) {
+        match resolver.define_type_alias(alias) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
             }
-            Ok(r) => r,
+            Ok(a) => resolved_aliases.push(a),
         }
     }
     let mut resolved_variants = Vec::new();
@@ -218,10 +239,17 @@ pub fn compile_typed_program(
 
     let next_name = resolver.next_name_id();
     let next_type_name = resolver.next_type_name_id();
-    let type_aliases = resolver.take_type_aliases();
     let name_table = resolver.into_name_table();
     let mut inferrer = Inferrer::new();
-    inferrer.set_type_aliases(type_aliases);
+    for alias in resolved_aliases {
+        match inferrer.register_alias(alias) {
+            Err(e) => {
+                report_type_errors(writer, input, &[e], name, &name_table)?;
+                return Err(anyhow!("type inference error"));
+            }
+            Ok(_) => {}
+        }
+    }
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {
