@@ -1,4 +1,3 @@
-use crate::driver::LoadError::DuplicateModule;
 use crate::lexer::TokenKind;
 use crate::lexer::{self, LexError};
 use crate::parser;
@@ -68,12 +67,19 @@ pub struct Crate {
     pub module_paths: BiMap<Vec<String>, ModuleId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DfsScope {
+    pub entry: u32,
+    pub exit: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ModuleData {
     pub id: ModuleId,
     pub parent: Option<ModuleId>,
     pub ast: Vec<Declaration>,
     pub file_path: VfsPath,
+    pub scope: DfsScope,
 }
 
 #[derive(Debug)]
@@ -81,6 +87,7 @@ struct LoadState {
     modules: HashMap<ModuleId, ModuleData>,
     next_id: ModuleId,
     paths: BiMap<Vec<String>, ModuleId>,
+    dfs_counter: u32,
 }
 
 impl LoadState {
@@ -97,17 +104,19 @@ impl Default for LoadState {
             modules: HashMap::new(),
             next_id: ModuleId(0),
             paths: BiMap::new(),
+            dfs_counter: 0,
         }
     }
 }
 
-fn load_after_root(
+fn load_inline_module(
     state: &mut LoadState,
-    search_dir: &VfsPath, // The directory to look for submodules
-    file_path: &VfsPath,
+    search_dir: &VfsPath,
+    file_path: &VfsPath, // The file containing this inline module
     logical_path: &mut Vec<String>,
     parent: Option<ModuleId>,
     parent_span: Option<Span>,
+    ast: Vec<Declaration>,
     depth: usize,
 ) -> Result<ModuleId, LoadError> {
     if depth >= RECURSION_LIMIT {
@@ -117,6 +126,94 @@ fn load_after_root(
         });
     }
 
+    let id = state.new_id();
+    let entry = state.dfs_counter;
+    state.dfs_counter += 1;
+
+    for declaration in &ast {
+        match declaration {
+            Declaration::Module(parser::ModuleDecl {
+                name, span, body, ..
+            }) => {
+                logical_path.push(name.clone());
+
+                if state.paths.contains_left(logical_path) {
+                    return Err(LoadError::DuplicateModule {
+                        file_path: file_path.clone(),
+                        path: logical_path.to_owned(),
+                        module_span: Some(*span),
+                    });
+                }
+
+                let next_directory = search_dir.join(name).map_err(|e| LoadError::VfsError {
+                    file_path: file_path.clone(),
+                    error: e,
+                    module_span: parent_span,
+                })?;
+                match body {
+                    Some(nested_ast) => {
+                        load_inline_module(
+                            state,
+                            &next_directory,
+                            file_path,
+                            logical_path,
+                            Some(id),
+                            Some(*span),
+                            nested_ast.clone(),
+                            depth + 1,
+                        )?;
+                    }
+                    None => {
+                        let path = search_dir
+                            .join(format!("{}{}", name, FILE_EXTENSION))
+                            .map_err(|e| LoadError::VfsError {
+                                file_path: file_path.clone(),
+                                error: e,
+                                module_span: parent_span,
+                            })?;
+
+                        load_after_root(
+                            state,
+                            &next_directory,
+                            &path,
+                            logical_path,
+                            Some(id),
+                            Some(*span),
+                            depth + 1,
+                        )?;
+                    }
+                }
+
+                logical_path.pop();
+            }
+            _ => {}
+        }
+    }
+
+    let exit = state.dfs_counter;
+    state.dfs_counter += 1;
+
+    let data = ModuleData {
+        id,
+        parent,
+        ast,
+        file_path: file_path.clone(),
+        scope: DfsScope { entry, exit },
+    };
+    state.modules.insert(id, data);
+    state.paths.insert(logical_path.clone(), id);
+    Ok(id)
+}
+
+fn load_after_root(
+    state: &mut LoadState,
+    search_dir: &VfsPath,
+    file_path: &VfsPath,
+    logical_path: &mut Vec<String>,
+    parent: Option<ModuleId>,
+    parent_span: Option<Span>,
+    depth: usize,
+) -> Result<ModuleId, LoadError> {
     let mut content = String::new();
     let mut reader = file_path.open_file().map_err(|e| LoadError::VfsError {
         file_path: file_path.clone(),
@@ -130,6 +227,7 @@ fn load_after_root(
             error: e,
             module_span: parent_span,
         })?;
+
     let mut lexer = lexer::Lexer::new(&content);
     let (tokens, lex_errors) = lexer.collect_all();
     if !lex_errors.is_empty() {
@@ -158,57 +256,17 @@ fn load_after_root(
     let ast = parsed
         .into_output()
         .expect("parse result should have output if no errors");
-    let id = state.new_id();
 
-    let data = ModuleData {
-        id,
+    load_inline_module(
+        state,
+        search_dir,
+        file_path,
+        logical_path,
         parent,
+        parent_span,
         ast,
-        file_path: file_path.clone(),
-    };
-    for declaration in &data.ast {
-        match declaration {
-            Declaration::Module(parser::ModuleDecl { name, span, .. }) => {
-                let path = search_dir
-                    .join(format!("{}{}", name, FILE_EXTENSION))
-                    .map_err(|e| LoadError::VfsError {
-                        file_path: file_path.clone(),
-                        error: e,
-                        module_span: parent_span,
-                    })?;
-                let next_directory = search_dir.join(name).map_err(|e| LoadError::VfsError {
-                    file_path: file_path.clone(),
-                    error: e,
-                    module_span: parent_span,
-                })?;
-
-                logical_path.push(name.clone());
-
-                if state.paths.contains_left(logical_path) {
-                    return Err(DuplicateModule {
-                        file_path: file_path.clone(),
-                        path: logical_path.to_owned(),
-                        module_span: Some(*span),
-                    });
-                }
-                load_after_root(
-                    state,
-                    &next_directory,
-                    &path,
-                    logical_path,
-                    Some(id),
-                    Some(*span),
-                    depth + 1,
-                )?;
-
-                logical_path.pop();
-            }
-            _ => {}
-        }
-    }
-    state.modules.insert(id, data);
-    state.paths.insert(logical_path.clone(), id);
-    Ok(id)
+        depth,
+    )
 }
 
 pub fn load_module(root_directory: &VfsPath, root_path: &VfsPath) -> Result<Crate, LoadError> {

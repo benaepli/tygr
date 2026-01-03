@@ -211,7 +211,11 @@ pub fn report_type_errors(
                     "kinds must match when unifying types".to_string(),
                 ]),
             TypeError::AliasCycle(cycle_path, span) => {
-                let cycle_str = cycle_path.join(" -> ");
+                let cycle_str = cycle_path
+                    .iter()
+                    .map(|id| name_table.lookup_type_name(id))
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
                 Diagnostic::error()
                     .with_message("type alias cycle detected")
                     .with_labels(vec![

@@ -204,7 +204,10 @@ impl Resolver {
 
     pub fn declare_type_alias(&mut self, alias: &TypeAlias) -> Result<TypeName, ResolutionError> {
         if self.type_aliases.contains_key(&alias.name) {
-            return Err(ResolutionError::DuplicateTypeAlias(alias.name.clone(), alias.span));
+            return Err(ResolutionError::DuplicateTypeAlias(
+                alias.name.clone(),
+                alias.span,
+            ));
         }
 
         let id = self.new_id();

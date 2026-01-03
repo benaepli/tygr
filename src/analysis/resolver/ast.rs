@@ -1,6 +1,7 @@
+use crate::analysis::resolver::ResolutionError;
 use crate::builtin::BuiltinFn;
-use crate::driver::ModuleId;
-use crate::parser::{BinOp, Span, Visibility};
+use crate::driver::{DfsScope, ModuleId};
+use crate::parser::{BinOp, Path, PathBase, Span, Visibility};
 use petgraph::graph::DiGraph;
 use petgraph::prelude::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -70,7 +71,7 @@ pub struct ResolvedPattern {
 }
 
 impl ResolvedPattern {
-    fn new(kind: ResolvedPatternKind, span: Span) -> Self {
+    pub fn new(kind: ResolvedPatternKind, span: Span) -> Self {
         ResolvedPattern { kind, span }
     }
 }
@@ -89,7 +90,7 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    fn new(kind: ResolvedKind, span: Span) -> Self {
+    pub fn new(kind: ResolvedKind, span: Span) -> Self {
         Resolved { kind, span }
     }
 }
@@ -111,7 +112,7 @@ pub struct ResolvedAnnotation {
 }
 
 impl ResolvedAnnotation {
-    fn new(kind: ResolvedAnnotationKind, span: Span) -> Self {
+    pub fn new(kind: ResolvedAnnotationKind, span: Span) -> Self {
         ResolvedAnnotation { kind, span }
     }
 }
@@ -203,6 +204,8 @@ pub struct ResolvedModuleData {
     pub definitions: HashMap<String, (CrateId, Name, Visibility)>,
     pub types: HashMap<String, (CrateId, TypeName, Visibility)>,
     pub modules: HashMap<String, (CrateId, ModuleId, Visibility)>,
+
+    pub scope: DfsScope,
 }
 
 pub type CrateId = NodeIndex;
@@ -238,13 +241,145 @@ impl CrateGraph {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ResolvedTypeDefinition {
+    Variant(ResolvedVariant),
+    Alias(ResolvedTypeAlias),
+}
+
+#[derive(Debug, Clone)]
 pub struct CrateDefMap {
     pub crate_id: CrateId,
-    pub modules: Vec<ResolvedModuleData>,
+    pub modules: HashMap<ModuleId, ResolvedModuleData>,
     pub root: ModuleId,
 
     pub extern_prelude: HashMap<String, CrateId>,
 
     pub definitions: HashMap<Name, ResolvedDefinition>,
-    pub types: HashMap<TypeName>,
+    pub types: HashMap<TypeName, ResolvedTypeDefinition>,
+    pub scope: DfsScope,
+}
+
+enum Namespace {
+    Type,
+    Value,
+}
+
+struct World {
+    crates: HashMap<CrateId, CrateDefMap>,
+}
+
+impl World {
+    pub fn resolve(
+        &self,
+        start_crate: CrateId,
+        start_module: ModuleId,
+        mut path: Path,
+        target_namespace: Namespace,
+    ) -> Result<Resolution, ResolutionError> {
+        let mut current_crate = start_crate;
+        let mut current_module = start_module;
+        match path.base {
+            Some(PathBase::Crate) => {
+                current_module = self.crates[&current_crate].root;
+            }
+            Some(PathBase::Super(n)) => {
+                for _ in 0..n {
+                    let mod_data = &self.crates[&current_crate].modules[&current_module];
+                    if let Some(parent) = mod_data.parent {
+                        current_module = parent;
+                    } else {
+                        todo!()
+                    }
+                }
+            }
+            None => {
+                if let Some(extern_crate_id) = self.crates[&current_crate]
+                    .extern_prelude
+                    .get(path.segments.get(0).expect("path must have one segment"))
+                {
+                    current_crate = *extern_crate_id;
+                    current_module = self.crates[extern_crate_id].root;
+                    path.segments.remove(0);
+                }
+            }
+        }
+
+        let segment_count = path.segments.len();
+        for (index, segment_name) in path.segments.iter().enumerate() {
+            let is_last_segment = index == segment_count - 1;
+            let mod_data = &self.crates[&current_crate].modules[&current_module];
+            if is_last_segment {
+                match target_namespace {
+                    Namespace::Value => {
+                        if let Some((c, id, vis)) = mod_data.definitions.get(segment_name) {
+                            self.check_visibility(
+                                vis,
+                                *c,
+                                current_module,
+                                start_crate,
+                                start_module,
+                            )?;
+                            return Ok(Resolution::Def(*c, *id));
+                        }
+                    }
+                    Namespace::Type => {
+                        if let Some((c, id, vis)) = mod_data.types.get(segment_name) {
+                            self.check_visibility(
+                                vis,
+                                *c,
+                                current_module,
+                                start_crate,
+                                start_module,
+                            )?;
+                            return Ok(Resolution::Type(*c, *id));
+                        }
+                    }
+                }
+                todo!()
+            } else {
+                if let Some((next_crate, next_mod_id, vis)) = mod_data.modules.get(segment_name) {
+                    self.check_visibility(
+                        vis,
+                        *next_crate,
+                        *next_mod_id,
+                        start_crate,
+                        start_module,
+                    )?;
+                    current_crate = *next_crate;
+                    current_module = *next_mod_id;
+                } else {
+                    todo!()
+                }
+            }
+        }
+
+        todo!()
+    }
+
+    fn check_visibility(
+        &self,
+        vis: &Visibility,
+        def_crate: CrateId,
+        def_module: ModuleId,
+        user_crate: CrateId,
+        user_module: ModuleId,
+    ) -> Result<(), ResolutionError> {
+        match vis {
+            Visibility::Public => Ok(()),
+            Visibility::Private => {
+                if def_crate != user_crate {
+                    todo!()
+                }
+                let def_scope = self.crates[&def_crate].modules[&def_module].scope;
+                let user_scope = self.crates[&user_crate].modules[&user_module].scope;
+
+                if def_scope.entry <= user_scope.entry && def_scope.exit >= user_scope.exit {
+                    Ok(())
+                } else {
+                    todo!()
+                }
+            }
+        }
+    }
 }
