@@ -15,20 +15,40 @@ use tygr::visualize::closure::visualize_closure_ir;
 use tygr::visualize::constructor::visualize_constructor_ir;
 use tygr::visualize::typed::TypedAstVisualizer;
 
+use tygr::manifest::{Manifest, ProjectType};
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// The path to the file to run. If omitted, starts a REPL.
-    #[arg(required = false)]
-    file_path: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
-    /// Run as a program (with a main function) instead of a script.
-    #[arg(short, long)]
-    program: bool,
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Starts a REPL.
+    Repl,
 
-    /// Visualize a compilation stage instead of running.
-    #[arg(long, value_name = "STAGE")]
-    visualize: Option<Stage>,
+    /// Runs a Tygr file as a script.
+    Script {
+        /// The path to the script file.
+        file: PathBuf,
+    },
+
+    /// Visualizes a compilation stage for a program.
+    Visualize {
+        /// The stage to visualize.
+        stage: Stage,
+        /// The path to the program file.
+        file: PathBuf,
+    },
+
+    /// Runs a Tygr program (via manifest or direct file).
+    Run {
+        /// Run a specific file as a program (bypass manifest).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -48,15 +68,43 @@ fn read_file(path: &PathBuf) -> String {
 fn main() {
     let cli = Cli::parse();
 
-    match cli.file_path {
-        Some(path) => match cli.visualize {
-            Some(Stage::Typed) => visualize_typed(&path, cli.program),
-            Some(Stage::Closure) => visualize_closure(&path),
-            Some(Stage::Constructor) => visualize_constructor(&path),
-            None if cli.program => run_program(&path),
-            None => run_script(&path),
+    match cli.command {
+        Some(Commands::Repl) | None => Repl::default().run(),
+        Some(Commands::Script { file }) => run_script(&file),
+        Some(Commands::Visualize { stage, file }) => match stage {
+            Stage::Typed => visualize_typed(&file, true),
+            Stage::Closure => visualize_closure(&file),
+            Stage::Constructor => visualize_constructor(&file),
         },
-        None => Repl::default().run(),
+        Some(Commands::Run { file }) => match file {
+            Some(path) => run_program(&path),
+            None => {
+                let current_dir = std::env::current_dir().unwrap_or_else(|e| {
+                    eprintln!("Error getting current directory: {}", e);
+                    process::exit(1);
+                });
+                let manifest_path = current_dir.join("Tygr.toml");
+                match Manifest::load(&manifest_path) {
+                    Ok(manifest) => {
+                        if manifest.project_type() != ProjectType::Binary {
+                            eprintln!(
+                                "Error: Project is not a binary. Only binary projects can be run."
+                            );
+                            process::exit(1);
+                        }
+                        let root = manifest.crate_root(&current_dir);
+                        run_program(&root);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Error: Tygr.toml not found in current directory, and no --file provided.\n{}",
+                            e
+                        );
+                        process::exit(1);
+                    }
+                }
+            }
+        },
     }
 }
 
