@@ -41,7 +41,7 @@ fn split_program(decls: Vec<Declaration>) -> (Vec<Definition>, Vec<Variant>, Vec
         match decl {
             Declaration::Def(d) => definitions.push(d),
             Declaration::Variant(v) => variants.push(v),
-            Declaration::Type(t) => type_aliases.push(t),
+            Declaration::TypeAlias(t) => type_aliases.push(t),
             _ => {}
         }
     }
@@ -73,20 +73,20 @@ pub fn compile_script(
     let (statements, variants, aliases) = split_statements(output);
     let mut resolver = Resolver::new();
     for variant in &variants {
-        if let Err(e) = resolver.declare_variant(variant) {
+        if let Err(e) = resolver.declare_global_variant(variant) {
             report_resolution_errors(writer, input, &[e], name)?;
             return Err(anyhow!("resolution error"));
         }
     }
     for alias in &aliases {
-        if let Err(e) = resolver.declare_type_alias(alias) {
+        if let Err(e) = resolver.declare_global_type_alias(alias) {
             report_resolution_errors(writer, input, &[e], name)?;
             return Err(anyhow!("resolution error"));
         }
     }
     let mut resolved_aliases = Vec::new();
     for alias in aliases {
-        match resolver.define_type_alias(alias) {
+        match resolver.define_global_type_alias(alias) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
@@ -96,7 +96,7 @@ pub fn compile_script(
     }
     let mut resolved_variants = Vec::new();
     for variant in variants {
-        match resolver.define_variant(variant) {
+        match resolver.define_global_variant(variant) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
@@ -188,20 +188,20 @@ pub fn compile_typed_program(
 
     let mut resolver = Resolver::new();
     for variant in &variants {
-        if let Err(e) = resolver.declare_variant(variant) {
+        if let Err(e) = resolver.declare_global_variant(variant) {
             report_resolution_errors(writer, input, &[e], name)?;
             return Err(anyhow!("resolution error"));
         }
     }
     for alias in &aliases {
-        if let Err(e) = resolver.declare_type_alias(alias) {
+        if let Err(e) = resolver.declare_global_type_alias(alias) {
             report_resolution_errors(writer, input, &[e], name)?;
             return Err(anyhow!("resolution error"));
         }
     }
     let mut resolved_aliases = Vec::new();
     for alias in aliases {
-        match resolver.define_type_alias(alias) {
+        match resolver.define_global_type_alias(alias) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
@@ -211,7 +211,7 @@ pub fn compile_typed_program(
     }
     let mut resolved_variants = Vec::new();
     for variant in variants {
-        match resolver.define_variant(variant) {
+        match resolver.define_global_variant(variant) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));
@@ -220,14 +220,14 @@ pub fn compile_typed_program(
         }
     }
     for definition in &definitions {
-        if let Err(e) = resolver.declare_definition(definition) {
+        if let Err(e) = resolver.declare_global_definition(definition) {
             report_resolution_errors(writer, input, &[e], name)?;
             return Err(anyhow!("resolution error"));
         }
     }
     let mut resolved_definitions = Vec::new();
     for definition in definitions {
-        match resolver.resolve_definition(definition) {
+        match resolver.define_global_definition(definition) {
             Err(e) => {
                 report_resolution_errors(writer, input, &[e], name)?;
                 return Err(anyhow!("resolution error"));

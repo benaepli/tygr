@@ -52,7 +52,8 @@ fn plain_path(name: String, span: Span) -> Path {
     }
 }
 
-fn visibility<'a, I>() -> impl Parser<'a, I, Visibility, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
+fn visibility<'a, I>()
+-> impl Parser<'a, I, Visibility, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
@@ -165,7 +166,8 @@ where
     })
 }
 
-fn annotation<'a, I>() -> impl Parser<'a, I, Annotation, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
+fn annotation<'a, I>()
+-> impl Parser<'a, I, Annotation, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
@@ -238,7 +240,8 @@ where
     })
 }
 
-fn generics<'a, I>() -> impl Parser<'a, I, Vec<Generic>, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
+fn generics<'a, I>()
+-> impl Parser<'a, I, Vec<Generic>, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
@@ -666,7 +669,8 @@ where
     })
 }
 
-fn type_alias<'a, I>() -> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
+fn type_alias<'a, I>()
+-> impl Parser<'a, I, TypeAlias, extra::Err<Rich<'a, TokenKind, Span>>> + Clone
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
@@ -850,21 +854,23 @@ where
         choice((
             use_decl().map(Declaration::Use),
             module_decl.map(Declaration::Module),
-            type_alias().map(Declaration::Type),
+            type_alias().map(Declaration::TypeAlias),
             variant().map(Declaration::Variant),
             def(expr()).map(Declaration::Def),
         ))
     })
 }
 
-pub fn script<'a, I>() -> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind, Span>>>
+pub fn script<'a, I>()
+-> impl Parser<'a, I, Vec<ReplStatement>, extra::Err<Rich<'a, TokenKind, Span>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
     repl().repeated().collect::<Vec<_>>().then_ignore(end())
 }
 
-pub fn program<'a, I>() -> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind, Span>>>
+pub fn program<'a, I>()
+-> impl Parser<'a, I, Vec<Declaration>, extra::Err<Rich<'a, TokenKind, Span>>>
 where
     I: BorrowInput<'a, Token = TokenKind, Span = Span> + Clone,
 {
@@ -881,7 +887,9 @@ pub fn make_input(
     tokens.map(eoi, |t| (&t.kind, &t.span))
 }
 
-pub fn parse_script(tokens: &'_ [Token]) -> ParseResult<Vec<ReplStatement>, Rich<'_, TokenKind, Span>> {
+pub fn parse_script(
+    tokens: &'_ [Token],
+) -> ParseResult<Vec<ReplStatement>, Rich<'_, TokenKind, Span>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
     let source = tokens
         .first()
@@ -892,7 +900,9 @@ pub fn parse_script(tokens: &'_ [Token]) -> ParseResult<Vec<ReplStatement>, Rich
     script().parse(input)
 }
 
-pub fn parse_program(tokens: &'_ [Token]) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind, Span>> {
+pub fn parse_program(
+    tokens: &'_ [Token],
+) -> ParseResult<Vec<Declaration>, Rich<'_, TokenKind, Span>> {
     let len = tokens.last().map(|t| t.span.end()).unwrap_or(0);
     let source = tokens
         .first()

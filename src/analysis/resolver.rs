@@ -2,9 +2,10 @@ mod ast;
 pub use ast::*;
 
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
+use crate::driver::Crate;
 use crate::parser::{
-    Annotation, AnnotationKind, Definition, Expr, ExprKind, Generic, Pattern, PatternKind,
-    SourceId, Span, Statement, StatementKind, TypeAlias, Variant,
+    Annotation, AnnotationKind, Declaration, Definition, Expr, ExprKind, Generic, ModuleDecl, Path,
+    Pattern, PatternKind, SourceId, Span, Statement, StatementKind, TypeAlias, UseDecl, Variant,
 };
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -12,7 +13,7 @@ use thiserror::Error;
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum ResolutionError {
     #[error("variable `{0}` not found")]
-    VariableNotFound(String, Span),
+    VariableNotFound(Path, Span),
     #[error("variable `{0}` is bound more than once in the same pattern")]
     DuplicateBinding(String, Span),
     #[error("type alias `{0}` is already defined")]
@@ -48,6 +49,8 @@ pub struct Resolver {
     // Name preservation for error messages
     name_origins: HashMap<Name, String>,
     type_name_origins: HashMap<TypeName, String>,
+
+    world: World,
 }
 
 impl Default for Resolver {
@@ -73,6 +76,8 @@ impl Resolver {
 
             name_origins: HashMap::new(),
             type_name_origins: HashMap::new(),
+
+            world: World::default(),
         };
 
         // Store builtin type names
@@ -93,9 +98,21 @@ impl Resolver {
         resolver
     }
 
+    fn new_name(&mut self) -> Name {
+        let id = self.next_id;
+        self.next_id = Name(self.next_id.0 + 1);
+        id
+    }
+
+    fn new_id(&mut self) -> TypeName {
+        let id = self.next_type;
+        self.next_type = TypeName(self.next_type.0 + 1);
+        id
+    }
+
     /// Register a custom function name in the global scope.
     /// Returns the assigned Name ID, or an error if the name already exists.
-    pub fn register_custom(&mut self, name: &str) -> Result<Name, ResolutionError> {
+    pub fn register_global_custom(&mut self, name: &str) -> Result<Name, ResolutionError> {
         if self.scopes[0].contains_key(name) {
             return Err(ResolutionError::DuplicateBinding(
                 name.to_string(),
@@ -112,18 +129,6 @@ impl Resolver {
         Ok(id)
     }
 
-    fn new_name(&mut self) -> Name {
-        let id = self.next_id;
-        self.next_id = Name(self.next_id.0 + 1);
-        id
-    }
-
-    fn new_id(&mut self) -> TypeName {
-        let id = self.next_type;
-        self.next_type = TypeName(self.next_type.0 + 1);
-        id
-    }
-
     fn resolve_annotation(
         &mut self,
         annot: Annotation,
@@ -131,36 +136,37 @@ impl Resolver {
         let span = annot.span;
 
         match annot.kind {
-            AnnotationKind::Var(name) => {
-                // Check type scopes first (generic parameters)
-                for scope in self.type_scopes.iter().rev() {
-                    if let Some(id) = scope.get(&name) {
+            AnnotationKind::Var(path) => {
+                if let Some(name) = path.simple() {
+                    // Check type scopes first (generic parameters)
+                    for scope in self.type_scopes.iter().rev() {
+                        if let Some(id) = scope.get(name) {
+                            return Ok(ResolvedAnnotation::new(
+                                ResolvedAnnotationKind::Var((None, *id)),
+                                span,
+                            ));
+                        }
+                    }
+
+                    // Check builtins
+                    if let Some(id) = BUILTIN_TYPES.get(name) {
                         return Ok(ResolvedAnnotation::new(
-                            ResolvedAnnotationKind::Var(*id),
+                            ResolvedAnnotationKind::Var((None, *id)),
+                            span,
+                        ));
+                    } else if let Some(id) = self.type_aliases.get(name) {
+                        return Ok(ResolvedAnnotation::new(
+                            ResolvedAnnotationKind::Alias((None, *id)),
+                            span,
+                        ));
+                    } else if let Some(id) = self.variants.get(name) {
+                        return Ok(ResolvedAnnotation::new(
+                            ResolvedAnnotationKind::Var((None, *id)),
                             span,
                         ));
                     }
                 }
-
-                // Check builtins
-                if let Some(id) = BUILTIN_TYPES.get(&name) {
-                    Ok(ResolvedAnnotation::new(
-                        ResolvedAnnotationKind::Var(*id),
-                        span,
-                    ))
-                } else if let Some(id) = self.type_aliases.get(&name) {
-                    Ok(ResolvedAnnotation::new(
-                        ResolvedAnnotationKind::Alias(*id),
-                        span,
-                    ))
-                } else if let Some(id) = self.variants.get(&name) {
-                    Ok(ResolvedAnnotation::new(
-                        ResolvedAnnotationKind::Var(*id),
-                        span,
-                    ))
-                } else {
-                    Err(ResolutionError::VariableNotFound(name, span))
-                }
+                Err(ResolutionError::VariableNotFound(path, span))
             }
 
             AnnotationKind::App(lhs, rhs) => {
@@ -206,7 +212,10 @@ impl Resolver {
         }
     }
 
-    pub fn declare_type_alias(&mut self, alias: &TypeAlias) -> Result<TypeName, ResolutionError> {
+    pub fn declare_global_type_alias(
+        &mut self,
+        alias: &TypeAlias,
+    ) -> Result<TypeName, ResolutionError> {
         if self.type_aliases.contains_key(&alias.name) {
             return Err(ResolutionError::DuplicateTypeAlias(
                 alias.name.clone(),
@@ -220,14 +229,20 @@ impl Resolver {
         Ok(id)
     }
 
-    pub fn define_type_alias(
+    pub fn define_global_type_alias(
         &mut self,
         alias: TypeAlias,
     ) -> Result<ResolvedTypeAlias, ResolutionError> {
-        let id = *self
-            .type_aliases
-            .get(&alias.name)
-            .ok_or_else(|| ResolutionError::VariableNotFound(alias.name.clone(), alias.span))?;
+        let id = *self.type_aliases.get(&alias.name).ok_or_else(|| {
+            ResolutionError::VariableNotFound(
+                Path {
+                    base: None,
+                    segments: vec![alias.name.clone()],
+                    span: alias.span,
+                },
+                alias.span,
+            )
+        })?;
 
         let mut type_scope = HashMap::new();
         let mut generic_ids = Vec::new();
@@ -243,13 +258,13 @@ impl Resolver {
         self.type_scopes.pop();
 
         Ok(ResolvedTypeAlias {
-            name: id,
-            generics: generic_ids,
+            name: (None, id),
+            type_params: generic_ids,
             body: resolved_body,
         })
     }
 
-    pub fn declare_variant(&mut self, variant: &Variant) -> Result<(), ResolutionError> {
+    pub fn declare_global_variant(&mut self, variant: &Variant) -> Result<(), ResolutionError> {
         if self.variants.contains_key(&variant.name) {
             return Err(ResolutionError::DuplicateVariant(
                 variant.name.clone(),
@@ -262,7 +277,10 @@ impl Resolver {
         Ok(())
     }
 
-    pub fn define_variant(&mut self, variant: Variant) -> Result<ResolvedVariant, ResolutionError> {
+    pub fn define_global_variant(
+        &mut self,
+        variant: Variant,
+    ) -> Result<ResolvedVariant, ResolutionError> {
         let def_id = *self
             .variants
             .get(&variant.name)
@@ -294,8 +312,9 @@ impl Resolver {
                 None => None,
             };
             constructors.insert(
-                name_id,
+                (None, name_id),
                 ResolvedConstructor {
+                    name: (None, name_id),
                     annotation: resolved_annotation,
                     span: constructor.span,
                 },
@@ -304,14 +323,14 @@ impl Resolver {
         }
         self.type_scopes.pop();
         Ok(ResolvedVariant {
-            name: def_id,
+            name: (None, def_id),
             type_params: generic_ids,
             constructors,
             span: variant.span,
         })
     }
 
-    pub fn declare_definition(&mut self, def: &Definition) -> Result<(), ResolutionError> {
+    pub fn declare_global_definition(&mut self, def: &Definition) -> Result<(), ResolutionError> {
         if self.scopes[0].contains_key(&def.name) {
             return Err(ResolutionError::DuplicateBinding(
                 def.name.clone(),
@@ -325,7 +344,7 @@ impl Resolver {
         Ok(())
     }
 
-    pub fn resolve_definition(
+    pub fn define_global_definition(
         &mut self,
         def: Definition,
     ) -> Result<ResolvedDefinition, ResolutionError> {
@@ -353,17 +372,158 @@ impl Resolver {
         self.type_scopes.pop();
 
         Ok(ResolvedDefinition {
-            name: (name_id, def.name),
+            name: ((None, name_id), def.name),
             expr: Box::new(resolved_expr),
-            generics: generic_ids,
+            type_params: generic_ids,
             annotation: resolved_annot,
             span: def.span,
         })
     }
 
-    pub fn resolve_expr(&mut self, expr: Expr) -> Result<Resolved, ResolutionError> {
-        let (resolved, _) = self.analyze(expr)?;
-        Ok(resolved)
+    fn declare_def(
+        &mut self,
+        resolved_crate: &mut CrateDefMap,
+        resolved_module: &mut ResolvedModuleData,
+        def: Definition,
+    ) -> Result<(), ResolutionError> {
+        if resolved_module.definitions.contains_key(&def.name) {
+            return Err(ResolutionError::DuplicateBinding(
+                def.name.clone(),
+                def.span,
+            ));
+        }
+        let name_id = self.new_name();
+        self.name_origins.insert(name_id, def.name.clone());
+        resolved_module.definitions.insert(
+            def.name.clone(),
+            (resolved_crate.crate_id, name_id, def.vis.clone()),
+        );
+        resolved_crate
+            .defs_to_resolve
+            .insert(name_id, (def, resolved_module.id));
+        Ok(())
+    }
+
+    fn declare_type_alias(
+        &mut self,
+        resolved_crate: &mut CrateDefMap,
+        resolved_module: &mut ResolvedModuleData,
+        alias: TypeAlias,
+        crate_id: CrateId,
+    ) -> Result<(), ResolutionError> {
+        if resolved_module.types.contains_key(&alias.name) {
+            return Err(ResolutionError::DuplicateTypeAlias(
+                alias.name.clone(),
+                alias.span,
+            ));
+        }
+
+        let id = self.new_id();
+        self.type_name_origins.insert(id, alias.name.clone());
+
+        resolved_module
+            .types
+            .insert(alias.name.clone(), (crate_id, id, alias.vis.clone()));
+
+        resolved_crate
+            .aliases_to_resolve
+            .insert(id, (alias, resolved_module.id));
+        Ok(())
+    }
+
+    fn declare_variant(
+        &mut self,
+        resolved_crate: &mut CrateDefMap,
+        resolved_module: &mut ResolvedModuleData,
+        variant: Variant,
+        crate_id: CrateId,
+    ) -> Result<(), ResolutionError> {
+        if resolved_module.types.contains_key(&variant.name) {
+            return Err(ResolutionError::DuplicateVariant(
+                variant.name.clone(),
+                variant.span,
+            ));
+        }
+
+        let id = self.new_id();
+        self.type_name_origins.insert(id, variant.name.clone());
+
+        resolved_module
+            .types
+            .insert(variant.name.clone(), (crate_id, id, variant.vis.clone()));
+
+        resolved_crate
+            .variants_to_resolve
+            .insert(id, (variant, resolved_module.id));
+        Ok(())
+    }
+
+    fn declare_module(
+        &mut self,
+        resolved_crate: &CrateDefMap,
+        resolved_module: &mut ResolvedModuleData,
+        module_decl: ModuleDecl,
+    ) {
+    }
+
+    pub fn resolve_crate(
+        &mut self,
+        id: CrateId,
+        mut krate: Crate,
+        extern_prelude: ExternPrelude,
+    ) -> Result<(), ResolutionError> {
+        // We use two phases. First is declaration.
+        let mut resolved = CrateDefMap {
+            crate_id: id,
+            modules: Default::default(),
+            root: krate.root_module,
+            extern_prelude,
+            definitions: Default::default(),
+            types: Default::default(),
+            defs_to_resolve: Default::default(),
+            variants_to_resolve: Default::default(),
+            aliases_to_resolve: Default::default(),
+            unresolved_imports: Vec::new(),
+        };
+
+        for (module_id, module) in krate.modules.drain() {
+            let mut resolved_module = ResolvedModuleData {
+                id: module_id,
+                parent: module.parent,
+                definitions: Default::default(),
+                types: Default::default(),
+                modules: Default::default(),
+                scope: module.scope,
+            };
+
+            for def in module.ast {
+                match def {
+                    Declaration::Def(def) => {
+                        self.declare_def(&mut resolved, &mut resolved_module, def)?
+                    }
+                    Declaration::Variant(_) => {}
+                    Declaration::TypeAlias(_) => {}
+                    Declaration::Module(module_decl) => {
+                        self.declare_module(&mut resolved, &mut resolved_module, module_decl)
+                    }
+                    Declaration::Use(UseDecl {
+                        path,
+                        alias,
+                        vis,
+                        span,
+                    }) => resolved.unresolved_imports.push(UnresolvedImport {
+                        module_id,
+                        path,
+                        alias,
+                        vis,
+                        span,
+                    }),
+                }
+            }
+
+            resolved.modules.insert(module_id, resolved_module);
+        }
+        Ok(())
     }
 
     pub fn resolve_global_statement(
@@ -476,7 +636,7 @@ impl Resolver {
                     None => None,
                 };
                 Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Constructor(variant_id, ctor_id, resolved),
+                    ResolvedPatternKind::Constructor((None, variant_id), (None, ctor_id), resolved),
                     span,
                 ))
             }
@@ -502,7 +662,7 @@ impl Resolver {
     fn resolve_local_statement(
         &mut self,
         stmt: Statement,
-    ) -> Result<(ResolvedStatement, HashSet<Name>), ResolutionError> {
+    ) -> Result<(ResolvedStatement, HashSet<(Option<CrateId>, Name)>), ResolutionError> {
         let span = stmt.span;
         match stmt.kind {
             StatementKind::Let(pattern, value, generics, annot) => {
@@ -567,31 +727,42 @@ impl Resolver {
         }
     }
 
-    fn analyze(&mut self, expr: Expr) -> Result<(Resolved, HashSet<Name>), ResolutionError> {
+    fn analyze(
+        &mut self,
+        expr: Expr,
+    ) -> Result<(Resolved, HashSet<(Option<CrateId>, Name)>), ResolutionError> {
         let span = expr.span;
         match expr.kind {
-            ExprKind::Var(name) => {
-                for scope in self.scopes.iter().rev() {
-                    if let Some(id) = scope.get(&name) {
-                        if let Some(builtin) = self.builtins.get(id) {
-                            return Ok((
-                                Resolved::new(ResolvedKind::Builtin(builtin.clone()), span),
-                                HashSet::new(),
-                            ));
-                        } else {
-                            let mut free = HashSet::new();
-                            free.insert(*id);
-                            return Ok((Resolved::new(ResolvedKind::Var(*id), span), free));
+            ExprKind::Var(path) => {
+                if let Some(name) = path.simple() {
+                    for scope in self.scopes.iter().rev() {
+                        if let Some(id) = scope.get(name) {
+                            if let Some(builtin) = self.builtins.get(id) {
+                                return Ok((
+                                    Resolved::new(ResolvedKind::Builtin(builtin.clone()), span),
+                                    HashSet::new(),
+                                ));
+                            } else {
+                                let mut free = HashSet::new();
+                                free.insert((None, *id));
+                                return Ok((
+                                    Resolved::new(ResolvedKind::Var((None, *id)), span),
+                                    free,
+                                ));
+                            }
                         }
                     }
+                    if let Some((variant_id, ctor_id)) = self.constructors.get(name).cloned() {
+                        return Ok((
+                            Resolved::new(
+                                ResolvedKind::Constructor((None, variant_id), (None, ctor_id)),
+                                span,
+                            ),
+                            HashSet::new(),
+                        ));
+                    }
                 }
-                if let Some((variant_id, ctor_id)) = self.constructors.get(&name).cloned() {
-                    return Ok((
-                        Resolved::new(ResolvedKind::Constructor(variant_id, ctor_id), span),
-                        HashSet::new(),
-                    ));
-                }
-                Err(ResolutionError::VariableNotFound(name, span))
+                Err(ResolutionError::VariableNotFound(path, span))
             }
 
             ExprKind::IntLit(i) => {
@@ -681,7 +852,7 @@ impl Resolver {
                 self.scopes.pop();
 
                 for name_id in new_scope.values() {
-                    all_free.remove(name_id);
+                    all_free.remove(&(None, *name_id));
                 }
 
                 Ok((
@@ -747,8 +918,8 @@ impl Resolver {
                 let (resolved_body, mut free_in_body) = self.analyze(*body)?;
                 self.scopes.pop();
 
-                for name_id in new_scope.values() {
-                    free_in_body.remove(name_id);
+                for &name_id in new_scope.values() {
+                    free_in_body.remove(&(None, name_id));
                 }
 
                 Ok((
@@ -795,8 +966,8 @@ impl Resolver {
                     let (resolved_body, mut free_in_body) = self.analyze(branch.expr)?;
                     self.scopes.pop();
 
-                    for name_id in new_scope.values() {
-                        free_in_body.remove(name_id);
+                    for &name_id in new_scope.values() {
+                        free_in_body.remove(&(None, name_id));
                     }
 
                     all_free = all_free.union(&free_in_body).cloned().collect();
@@ -845,8 +1016,8 @@ impl Resolver {
                 };
 
                 let block_scope = self.scopes.pop().unwrap();
-                for name_id in block_scope.values() {
-                    all_free.remove(name_id);
+                for &name_id in block_scope.values() {
+                    all_free.remove(&(None, name_id));
                 }
 
                 Ok((

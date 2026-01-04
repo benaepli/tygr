@@ -80,12 +80,13 @@ impl Repl {
         let scheme = func.type_scheme();
         let func = Rc::new(func);
 
-        let name_id = self.resolver.register_custom(&name_str).map_err(|source| {
-            ReplError::CustomFunctionRegistration {
+        let name_id = self
+            .resolver
+            .register_global_custom(&name_str)
+            .map_err(|source| ReplError::CustomFunctionRegistration {
                 name: name_str.clone(),
                 source,
-            }
-        })?;
+            })?;
 
         self.inferrer.register_custom_type(name_id, scheme.clone());
         self.type_env.insert(name_id, scheme);
@@ -243,8 +244,8 @@ impl Repl {
             ReplStatement::Type(t) => {
                 let res = self
                     .resolver
-                    .declare_type_alias(&t)
-                    .and_then(|_| self.resolver.define_type_alias(t));
+                    .declare_global_type_alias(&t)
+                    .and_then(|_| self.resolver.define_global_type_alias(t));
 
                 match res {
                     Err(e) => {
@@ -261,8 +262,8 @@ impl Repl {
             ReplStatement::Variant(v) => {
                 let res = self
                     .resolver
-                    .declare_variant(&v)
-                    .and_then(|_| self.resolver.define_variant(v));
+                    .declare_global_variant(&v)
+                    .and_then(|_| self.resolver.define_global_variant(v));
 
                 match res {
                     Err(e) => {

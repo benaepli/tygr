@@ -1,7 +1,8 @@
 use crate::analysis::resolver::ResolutionError;
 use crate::builtin::BuiltinFn;
 use crate::driver::{DfsScope, ModuleId};
-use crate::parser::{BinOp, Path, PathBase, Span, Visibility};
+use crate::parser::{BinOp, Definition, Path, PathBase, Span, TypeAlias, Variant, Visibility};
+use js_sys::WebAssembly::Global;
 use petgraph::graph::DiGraph;
 use petgraph::prelude::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -31,26 +32,36 @@ impl fmt::Display for TypeName {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedConstructor {
+    pub name: GlobalName,
     pub annotation: Option<ResolvedAnnotation>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedVariant {
-    pub name: TypeName,
+    pub name: GlobalType,
     pub type_params: Vec<TypeName>,
-    pub constructors: HashMap<Name, ResolvedConstructor>,
+    pub constructors: HashMap<GlobalName, ResolvedConstructor>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ResolvedDefinition {
-    pub name: (Name, String),
+    pub name: (GlobalName, String),
     pub expr: Box<Resolved>,
-    pub generics: Vec<TypeName>,
+    pub type_params: Vec<TypeName>,
     pub annotation: Option<ResolvedAnnotation>,
     pub span: Span,
 }
+
+#[derive(Debug, Clone)]
+pub enum ResolvedValueDefinition {
+    Constructor(TypeName),
+    Definition(ResolvedDefinition),
+}
+
+pub type GlobalType = (Option<CrateId>, TypeName);
+pub type GlobalName = (Option<CrateId>, Name);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedPatternKind {
@@ -61,7 +72,7 @@ pub enum ResolvedPatternKind {
     Cons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     EmptyList,
     Record(HashMap<String, ResolvedPattern>),
-    Constructor(TypeName, Name, Option<Box<ResolvedPattern>>),
+    Constructor(GlobalType, GlobalName, Option<Box<ResolvedPattern>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,14 +87,14 @@ impl ResolvedPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ResolvedMatchBranch {
     pub pattern: ResolvedPattern,
     pub expr: Box<Resolved>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Resolved {
     pub kind: ResolvedKind,
     pub span: Span,
@@ -97,8 +108,8 @@ impl Resolved {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedAnnotationKind {
-    Var(TypeName),
-    Alias(TypeName),
+    Var(GlobalType),
+    Alias(GlobalType),
     App(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Pair(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
     Lambda(Box<ResolvedAnnotation>, Box<ResolvedAnnotation>),
@@ -117,7 +128,7 @@ impl ResolvedAnnotation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ResolvedStatement {
     pub pattern: ResolvedPattern,
     pub value: Box<Resolved>,
@@ -126,13 +137,13 @@ pub struct ResolvedStatement {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ResolvedKind {
-    Var(Name),
+    Var(GlobalName),
     Lambda {
         param: ResolvedPattern,
         body: Box<Resolved>,
-        captures: HashSet<Name>,
+        captures: HashSet<GlobalName>,
         param_type: Option<ResolvedAnnotation>,
     },
     App(Box<Resolved>, Box<Resolved>),
@@ -155,7 +166,7 @@ pub enum ResolvedKind {
     FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
-    Constructor(TypeName, Name),
+    Constructor(GlobalType, GlobalName),
 }
 
 impl ResolvedKind {
@@ -191,8 +202,8 @@ impl ResolvedKind {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTypeAlias {
-    pub name: TypeName,
-    pub generics: Vec<TypeName>,
+    pub name: GlobalType,
+    pub type_params: Vec<TypeName>,
     pub body: ResolvedAnnotation,
 }
 
@@ -208,7 +219,10 @@ pub struct ResolvedModuleData {
     pub scope: DfsScope,
 }
 
-pub type CrateId = NodeIndex;
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, PartialOrd, Ord,
+)]
+pub struct CrateId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resolution {
@@ -233,11 +247,12 @@ impl CrateGraph {
     pub fn add_crate(&mut self, name: &str, data: CrateDefMap) -> CrateId {
         let idx = self.graph.add_node(data);
         self.index_map.insert(idx, name.to_string());
-        idx
+        CrateId(idx.index())
     }
 
     pub fn add_dependency(&mut self, from: CrateId, to: CrateId, alias: String) {
-        self.graph.add_edge(from, to, alias);
+        self.graph
+            .add_edge(NodeIndex::new(from.0), NodeIndex::new(to.0), alias);
     }
 }
 
@@ -247,25 +262,41 @@ pub enum ResolvedTypeDefinition {
     Alias(ResolvedTypeAlias),
 }
 
+pub type ExternPrelude = HashMap<String, CrateId>;
+
+#[derive(Debug, Clone)]
+pub struct UnresolvedImport {
+    pub module_id: ModuleId,
+    pub path: Path,
+    pub alias: Option<String>,
+    pub vis: Visibility,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct CrateDefMap {
     pub crate_id: CrateId,
     pub modules: HashMap<ModuleId, ResolvedModuleData>,
     pub root: ModuleId,
 
-    pub extern_prelude: HashMap<String, CrateId>,
+    pub extern_prelude: ExternPrelude,
 
     pub definitions: HashMap<Name, ResolvedDefinition>,
     pub types: HashMap<TypeName, ResolvedTypeDefinition>,
-    pub scope: DfsScope,
+
+    pub defs_to_resolve: HashMap<Name, (Definition, ModuleId)>,
+    pub variants_to_resolve: HashMap<TypeName, (Variant, ModuleId)>,
+    pub aliases_to_resolve: HashMap<TypeName, (TypeAlias, ModuleId)>,
+    pub unresolved_imports: Vec<UnresolvedImport>,
 }
 
-enum Namespace {
+pub enum Namespace {
     Type,
     Value,
 }
 
-struct World {
+#[derive(Debug, Clone, Default)]
+pub struct World {
     crates: HashMap<CrateId, CrateDefMap>,
 }
 

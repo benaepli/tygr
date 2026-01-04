@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeKind, TypeScheme};
-use crate::analysis::resolver::TypeName;
+use crate::analysis::resolver::{GlobalName, GlobalType, TypeName};
 use phf::Map;
 use phf_macros::phf_map;
 use std::rc::Rc;
@@ -96,7 +96,7 @@ fn mono(ty: Rc<Type>) -> TypeScheme {
 }
 
 fn con(name: TypeName) -> Rc<Type> {
-    Type::simple(name)
+    Type::simple((None, name))
 }
 
 fn func(a: Rc<Type>, b: Rc<Type>) -> Rc<Type> {
@@ -122,7 +122,11 @@ pub static BUILTIN_TYPES: Map<&'static str, TypeName> = phf_map! {
     "list" => LIST_TYPE,
 };
 
-pub fn builtin_kinds(name: TypeName) -> Option<Rc<Kind>> {
+pub fn builtin_kinds((krate, name): GlobalType) -> Option<Rc<Kind>> {
+    if krate == None {
+        return None;
+    }
+
     if name == INT_TYPE
         || name == FLOAT_TYPE
         || name == BOOL_TYPE

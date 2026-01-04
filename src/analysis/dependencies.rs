@@ -1,4 +1,4 @@
-use crate::analysis::resolver::{Name, Resolved, ResolvedDefinition, ResolvedKind};
+use crate::analysis::resolver::{GlobalName, Resolved, ResolvedDefinition, ResolvedKind};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
 use std::collections::{HashMap, HashSet};

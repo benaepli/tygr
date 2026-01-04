@@ -127,6 +127,15 @@ pub struct Path {
     pub span: Span,
 }
 
+impl Path {
+    pub fn simple(&self) -> Option<&str> {
+        if self.base != None || self.segments.len() != 1 {
+            return None;
+        }
+        Some(&self.segments[0])
+    }
+}
+
 impl fmt::Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.base {
@@ -146,7 +155,7 @@ impl fmt::Display for Path {
 pub enum Declaration {
     Def(Definition),
     Variant(Variant),
-    Type(TypeAlias),
+    TypeAlias(TypeAlias),
     Module(ModuleDecl),
     Use(UseDecl),
 }
