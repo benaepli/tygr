@@ -250,7 +250,7 @@ impl Resolver {
         for generic in alias.generics {
             let id = self.new_id();
             type_scope.insert(generic.name, id);
-            generic_ids.push(id);
+            generic_ids.push((None, id));
         }
 
         self.type_scopes.push(type_scope);
@@ -294,7 +294,7 @@ impl Resolver {
             let id = self.new_id();
             self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
-            generic_ids.push(id);
+            generic_ids.push((None, id));
         }
         self.type_scopes.push(type_scope);
         for (name, constructor) in variant.constructors.into_iter() {
@@ -359,7 +359,7 @@ impl Resolver {
             let id = self.new_id();
             self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
-            generic_ids.push(id);
+            generic_ids.push((None, id));
         }
 
         self.type_scopes.push(type_scope);
@@ -606,7 +606,10 @@ impl Resolver {
                 if scope.insert(name.clone(), new_id).is_some() {
                     return Err(ResolutionError::DuplicateBinding(name, span));
                 }
-                Ok(ResolvedPattern::new(ResolvedPatternKind::Var(new_id), span))
+                Ok(ResolvedPattern::new(
+                    ResolvedPatternKind::Var((None, new_id)),
+                    span,
+                ))
             }
             PatternKind::Pair(p1, p2) => {
                 let resolved_p1 = self.analyze_pattern(*p1, scope)?;
@@ -846,7 +849,7 @@ impl Resolver {
                 for (name_str, expr) in fields {
                     let (resolved_expr, free_vars) = self.analyze(expr)?;
                     let name_id = *new_scope.get(&name_str).unwrap();
-                    resolved_fields.insert(name_str, (name_id, resolved_expr));
+                    resolved_fields.insert(name_str, ((None, name_id), resolved_expr));
                     all_free.extend(free_vars);
                 }
                 self.scopes.pop();

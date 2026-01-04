@@ -115,7 +115,7 @@ fn parse_simple_type(s: &str) -> Result<Rc<Type>, JsError> {
             let inner = &s[1..s.len() - 1];
             let inner_ty = parse_simple_type(inner)?;
             let list_con = Type::new(
-                TypeKind::Con(LIST_TYPE),
+                TypeKind::Con((None, LIST_TYPE)),
                 Rc::new(Kind::Arrow(Rc::new(Kind::Star), Rc::new(Kind::Star))),
             );
             Ok(Type::new(

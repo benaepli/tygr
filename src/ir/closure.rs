@@ -1,7 +1,7 @@
 use crate::analysis::inference::{
     Type, TypeID, TypeKind, Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind,
 };
-use crate::analysis::resolver::{Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType, Name, TypeName};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -16,14 +16,14 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub struct VariantDef {
-    pub name: TypeName,
+    pub name: GlobalType,
     pub type_params: Vec<TypeID>,
     pub constructors: Vec<ConstructorDef>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstructorDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub payload: Option<Rc<Type>>,
 }
 
@@ -42,25 +42,25 @@ pub enum Definition {
 
 #[derive(Debug, Clone)]
 pub struct StructDef {
-    pub name: TypeName,
+    pub name: GlobalType,
     pub type_params: Vec<TypeID>,
     pub fields: Vec<(Name, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub type_params: Vec<TypeID>,
     pub param: Name,
     pub env_param: Name,
-    pub env_struct: TypeName,
+    pub env_struct: GlobalType,
     pub body: Expr,
     pub ret_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub ty: Rc<Type>,
     pub val: Expr,
 }
@@ -98,19 +98,19 @@ pub enum PatternKind {
     Cons(Box<Pattern>, Box<Pattern>),
     EmptyList,
     Record(BTreeMap<String, Pattern>),
-    Constructor(TypeName, Name, Option<Box<Pattern>>),
+    Constructor(GlobalType, GlobalName, Option<Box<Pattern>>),
 }
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Local(Name),
-    Global(Name),
+    Global(GlobalName),
     EnvAccess {
         field: Name,
     },
     MakeClosure {
-        fn_ref: Name,
-        env_struct: TypeName,
+        fn_ref: GlobalName,
+        env_struct: GlobalType,
         captures: Vec<(Name, Expr)>,
     },
     CallClosure {
@@ -133,13 +133,13 @@ pub enum ExprKind {
 
     Cons(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
-    RecRecord(BTreeMap<String, (Name, Expr)>),
+    RecRecord(BTreeMap<String, (GlobalName, Expr)>),
     FieldAccess(Box<Expr>, String),
 
     Builtin(BuiltinFn),
     Constructor {
-        variant: TypeName,
-        ctor: Name,
+        variant: GlobalType,
+        ctor: GlobalName,
         nullary: bool,
     },
 }
@@ -199,8 +199,8 @@ pub struct Converter {
     definitions: Vec<Definition>,
     counter: Name,
     type_counter: TypeName,
-    globals: HashMap<Name, Rc<Type>>,
-    variants: BTreeMap<TypeName, VariantDef>,
+    globals: HashMap<GlobalName, Rc<Type>>,
+    variants: BTreeMap<GlobalType, VariantDef>,
 }
 
 impl Converter {
@@ -283,7 +283,7 @@ impl Converter {
     fn convert_pattern(&self, pat: TypedPattern) -> Pattern {
         let ty = pat.ty.clone();
         let kind = match pat.kind {
-            TypedPatternKind::Var { name } => PatternKind::Var(name),
+            TypedPatternKind::Var { name: (_cid, name) } => PatternKind::Var(name),
             TypedPatternKind::Wildcard => PatternKind::Wildcard,
             TypedPatternKind::Unit => PatternKind::Unit,
             TypedPatternKind::Pair(p1, p2) => PatternKind::Pair(
@@ -315,7 +315,7 @@ impl Converter {
         scope: &mut HashMap<Name, VarSource>,
     ) {
         match &pat.kind {
-            TypedPatternKind::Var { name } => {
+            TypedPatternKind::Var { name: (_cid, name) } => {
                 scope.insert(*name, VarSource::Local(*name, pat.ty.clone()));
             }
             TypedPatternKind::Pair(p1, p2) | TypedPatternKind::Cons(p1, p2) => {
@@ -363,15 +363,16 @@ impl Converter {
                 kind: ExprKind::EmptyListLit,
                 ty,
             },
-            TypedKind::Var(name) => {
+            TypedKind::Var(global_name) => {
+                let (_cid, name) = global_name;
                 let kind = match scope.get(&name) {
                     Some(VarSource::Local(n, _)) => ExprKind::Local(*n),
                     Some(VarSource::Env { field, .. }) => ExprKind::EnvAccess { field: *field },
                     None => {
-                        if self.globals.contains_key(&name) {
-                            ExprKind::Global(name)
+                        if self.globals.contains_key(&global_name) {
+                            ExprKind::Global(global_name)
                         } else {
-                            panic!("Variable {:?} not found in scope or globals", name);
+                            panic!("Variable {:?} not found in scope or globals", global_name);
                         }
                     }
                 };
@@ -389,8 +390,9 @@ impl Converter {
                 let mut env_init_exprs = Vec::new();
                 let mut inner_scope = HashMap::new();
 
-                for cap_name in sorted_captures {
-                    if self.globals.contains_key(&cap_name) {
+                for cap_global_name in sorted_captures {
+                    let (_cid, cap_name) = cap_global_name;
+                    if self.globals.contains_key(&cap_global_name) {
                         continue;
                     }
                     let (source_expr_kind, cap_ty) = match scope.get(&cap_name) {
@@ -420,8 +422,8 @@ impl Converter {
                     );
                 }
 
-                let fn_name = self.next_name();
-                let env_struct_name = self.next_type();
+                let fn_name = (None, self.next_name());
+                let env_struct_name = (None, self.next_type());
                 let env_param_name = self.next_name();
                 let arg_param_name = self.next_name();
 

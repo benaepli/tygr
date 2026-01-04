@@ -96,7 +96,7 @@ fn mono(ty: Rc<Type>) -> TypeScheme {
 }
 
 fn con(name: TypeName) -> Rc<Type> {
-    Type::simple((None, name))
+    Type::simple(name)
 }
 
 fn func(a: Rc<Type>, b: Rc<Type>) -> Rc<Type> {

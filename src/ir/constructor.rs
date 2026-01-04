@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeID, TypeKind};
-use crate::analysis::resolver::{Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType, Name};
 use crate::builtin::BuiltinFn;
 use crate::ir::closure::{
     Cluster as ClosureCluster, Definition as ClosureDef, Expr as ClosureExpr,
@@ -33,25 +33,25 @@ pub enum Definition {
 
 #[derive(Debug, Clone)]
 pub struct StructDef {
-    pub name: TypeName,
+    pub name: GlobalType,
     pub type_params: Vec<TypeID>,
     pub fields: Vec<(Name, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub type_params: Vec<TypeID>,
     pub param: Name,
     pub env_param: Name,
-    pub env_struct: TypeName,
+    pub env_struct: GlobalType,
     pub body: Expr,
     pub ret_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub ty: Rc<Type>,
     pub val: Expr,
 }
@@ -98,13 +98,13 @@ pub enum PatternKind {
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Local(Name),
-    Global(Name),
+    Global(GlobalName),
     EnvAccess {
         field: Name,
     },
     MakeClosure {
-        fn_ref: Name,
-        env_struct: TypeName,
+        fn_ref: GlobalName,
+        env_struct: GlobalType,
         captures: Vec<(Name, Expr)>,
     },
     CallClosure {
@@ -125,7 +125,7 @@ pub enum ExprKind {
     RecordLit(BTreeMap<String, Expr>),
     Cons(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
-    RecRecord(BTreeMap<String, (Name, Expr)>),
+    RecRecord(BTreeMap<String, (GlobalName, Expr)>),
     FieldAccess(Box<Expr>, String),
     Builtin(BuiltinFn),
 
@@ -136,7 +136,7 @@ pub enum ExprKind {
 }
 
 struct TagMap {
-    mapping: BTreeMap<(TypeName, Name), u32>,
+    mapping: BTreeMap<(GlobalType, GlobalName), u32>,
 }
 
 impl TagMap {
@@ -146,11 +146,11 @@ impl TagMap {
         }
     }
 
-    fn insert(&mut self, type_name: TypeName, ctor_name: Name, tag: u32) {
+    fn insert(&mut self, type_name: GlobalType, ctor_name: GlobalName, tag: u32) {
         self.mapping.insert((type_name, ctor_name), tag);
     }
 
-    fn get(&self, type_name: TypeName, ctor_name: Name) -> u32 {
+    fn get(&self, type_name: GlobalType, ctor_name: GlobalName) -> u32 {
         *self
             .mapping
             .get(&(type_name, ctor_name))
@@ -163,7 +163,7 @@ pub struct Converter {
     generated_funcs: Vec<FuncDef>,
 
     // Mapping from constructor name to the name of the generated helper function
-    ctor_helpers: HashMap<(TypeName, Name), Name>,
+    ctor_helpers: HashMap<(GlobalType, GlobalName), GlobalName>,
     name_counter: Name,
 }
 
@@ -191,7 +191,7 @@ impl Converter {
                 self.tag_map.insert(variant.name, ctor.name, tag);
 
                 if let Some(payload_ty) = &ctor.payload {
-                    let helper_name = self.next_name();
+                    let helper_name = (None, self.next_name());
                     self.ctor_helpers
                         .insert((variant.name, ctor.name), helper_name);
 

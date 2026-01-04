@@ -54,8 +54,8 @@ impl Type {
         Rc::new(Self { ty, kind })
     }
 
-    pub fn simple(name: GlobalType) -> Rc<Self> {
-        Self::new(TypeKind::Con(name), Rc::new(Kind::Star))
+    pub fn simple(name: TypeName) -> Rc<Self> {
+        Self::new(TypeKind::Con((None, name)), Rc::new(Kind::Star))
     }
 }
 
@@ -93,7 +93,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                 write!(f, "{}[{}]", lhs_display, rhs_display)
             }
             TypeKind::AliasHead((_, name), args) => {
-                write!(f, "{}", name)?;
+                write!(f, "{}", self.name_table.lookup_local_type_name(name))?;
                 for arg in args {
                     let arg_display = TypeDisplay::new(arg.clone(), self.name_table);
                     write!(f, "[{}]", arg_display)?;
@@ -139,14 +139,14 @@ pub struct TypedPattern {
 
 #[derive(Debug, Clone)]
 pub enum TypedPatternKind {
-    Var { name: Name },
+    Var { name: GlobalName },
     Unit,
     Pair(Box<TypedPattern>, Box<TypedPattern>),
     Wildcard,
     Cons(Box<TypedPattern>, Box<TypedPattern>),
     EmptyList,
     Record(BTreeMap<String, TypedPattern>),
-    Constructor(TypeName, Name, Option<Box<TypedPattern>>),
+    Constructor(GlobalType, GlobalName, Option<Box<TypedPattern>>),
 }
 
 #[derive(Debug, Clone)]
@@ -165,7 +165,7 @@ pub enum TypedGroup {
 
 #[derive(Debug, Clone)]
 pub struct TypedDefinition {
-    pub name: (Name, String),
+    pub name: (GlobalName, String),
     pub expr: Box<Typed>,
     pub ty: Rc<Type>,
     pub scheme: TypeScheme,
@@ -177,7 +177,7 @@ pub struct TypedStatement {
     pub pattern: TypedPattern,
     pub value: Box<Typed>,
     pub ty: Rc<Type>,
-    pub bindings: Vec<(Name, TypeScheme)>, // Maps names bound in the pattern to a scheme
+    pub bindings: Vec<(GlobalName, TypeScheme)>, // Maps names bound in the pattern to a scheme
     pub span: Span,
 }
 
@@ -212,7 +212,7 @@ pub enum TypedKind {
     RecordLit(BTreeMap<String, Typed>),
 
     BinOp(BinOp, Box<Typed>, Box<Typed>),
-    RecRecord(BTreeMap<String, (Name, Typed)>),
+    RecRecord(BTreeMap<String, (GlobalName, Typed)>),
     FieldAccess(Box<Typed>, String),
 
     Builtin(BuiltinFn),
@@ -230,7 +230,7 @@ pub struct TypedVariant {
     pub definition: VariantDef,
 }
 
-pub type Environment = HashMap<Name, TypeScheme>;
+pub type Environment = HashMap<GlobalName, TypeScheme>;
 type Substitution = HashMap<TypeID, Rc<Type>>;
 type TypeContext = HashMap<GlobalType, Rc<Type>>;
 
@@ -242,8 +242,8 @@ pub enum TypeError {
     #[error("occurs check failed: type variable {0} occurs in {1:?}")]
     OccursCheck(TypeID, Rc<Type>, Span),
 
-    #[error("unbound variable: {0}")]
-    UnboundVariable(Name, Span),
+    #[error("unbound variable")]
+    UnboundVariable(GlobalName, Span),
 
     #[error("record field mismatch: records have different fields")]
     RecordFieldMismatch(Rc<Type>, Rc<Type>, Span),
@@ -252,22 +252,22 @@ pub enum TypeError {
     FieldAccessOnNonRecord(Rc<Type>, Span),
 
     #[error("variant type not found")]
-    VariantNotFound(TypeName, Span),
+    VariantNotFound(GlobalType, Span),
 
     #[error("constructor not found in type")]
-    ConstructorNotFound(TypeName, Name, Span),
+    ConstructorNotFound(GlobalType, GlobalName, Span),
 
     #[error("invalid constructor type (expected function type)")]
     InvalidConstructorType(Span),
 
-    #[error("unknown type alias: {0}")]
-    UnknownTypeAlias(TypeName, Span),
+    #[error("unknown type alias")]
+    UnknownTypeAlias(GlobalType, Span),
 
     #[error("kind mismatch: expected {1:?}, found {0:?}")]
     KindMismatch(Rc<Kind>, Rc<Kind>, Span),
 
     #[error("type alias cycle detected: {0:?}")]
-    AliasCycle(Vec<TypeName>, Span),
+    AliasCycle(Vec<GlobalType>, Span),
 }
 
 pub struct Inferrer {
@@ -443,7 +443,7 @@ impl Inferrer {
                     let entry = self
                         .type_aliases
                         .get(name)
-                        .ok_or_else(|| TypeError::UnknownTypeAlias(name, annot.span))?
+                        .ok_or_else(|| TypeError::UnknownTypeAlias(*name, annot.span))?
                         .clone();
                     let mut new_args = args.clone();
                     new_args.push(t_rhs.clone());
@@ -457,7 +457,7 @@ impl Inferrer {
                             return Err(TypeError::AliasCycle(cycle_path, annot.span));
                         }
 
-                        let subs: HashMap<TypeName, Rc<Type>> =
+                        let subs: HashMap<GlobalType, Rc<Type>> =
                             entry.type_params.iter().cloned().zip(new_args).collect();
                         self.alias_expansion_stack.push(name.clone());
                         let result = self.instantiate_with_subs(&entry.body, &subs);
@@ -521,22 +521,22 @@ impl Inferrer {
     fn instantiate_with_subs(
         &mut self,
         annot: &ResolvedAnnotation,
-        subs: &HashMap<TypeName, Rc<Type>>,
+        subs: &HashMap<GlobalType, Rc<Type>>,
     ) -> Result<Rc<Type>, TypeError> {
         match &annot.kind {
-            ResolvedAnnotationKind::Var((_, name)) => {
+            ResolvedAnnotationKind::Var(type_id) => {
                 // Check if this type variable should be substituted
-                if let Some(ty) = subs.get(name) {
+                if let Some(ty) = subs.get(type_id) {
                     Ok(ty.clone())
-                } else if let Some(ty) = self.type_ctx.get(name) {
+                } else if let Some(ty) = self.type_ctx.get(type_id) {
                     Ok(ty.clone())
-                } else if let Some(kind) = self.lookup_kind(*name) {
-                    Ok(Type::new(TypeKind::Con((None, *name)), kind))
+                } else if let Some(kind) = self.lookup_kind(type_id) {
+                    Ok(Type::new(TypeKind::Con(*type_id), kind))
                 } else {
-                    Ok(Type::new(TypeKind::Con((None, *name)), self.new_kind()))
+                    Ok(Type::new(TypeKind::Con(*type_id), self.new_kind()))
                 }
             }
-            ResolvedAnnotationKind::Alias(_, name) => {
+            ResolvedAnnotationKind::Alias(name) => {
                 if self.alias_expansion_stack.contains(name) {
                     let mut cycle_path = self.alias_expansion_stack.clone();
                     cycle_path.push(name.clone());
@@ -585,7 +585,7 @@ impl Inferrer {
                             return Err(TypeError::AliasCycle(cycle_path, annot.span));
                         }
 
-                        let inner_subs: HashMap<TypeName, Rc<Type>> =
+                        let inner_subs: HashMap<GlobalType, Rc<Type>> =
                             entry.type_params.iter().cloned().zip(new_args).collect();
                         self.alias_expansion_stack.push(name.clone());
                         let result = self.instantiate_with_subs(&entry.body, &inner_subs);
@@ -961,9 +961,9 @@ impl Inferrer {
 
     fn get_list_constructor(&self) -> Rc<Type> {
         let kind = self
-            .lookup_kind(LIST_TYPE)
+            .lookup_kind(&(None, LIST_TYPE))
             .expect("List type kind not found");
-        Type::new(TypeKind::Con(LIST_TYPE), kind)
+        Type::new(TypeKind::Con((None, LIST_TYPE)), kind)
     }
 
     fn infer_pattern(
@@ -1051,7 +1051,7 @@ impl Inferrer {
                     span,
                 })
             }
-            ResolvedPatternKind::Constructor((_, variant_id), ctor_id, pat) => {
+            ResolvedPatternKind::Constructor(variant_id, ctor_id, pat) => {
                 let Some(variant) = self.variants.get(&variant_id) else {
                     return Err(TypeError::VariantNotFound(variant_id, span));
                 };
@@ -1138,13 +1138,13 @@ impl Inferrer {
                     span,
                 })
             }
-            ResolvedKind::Var(krate, name) => {
+            ResolvedKind::Var(name) => {
                 let scheme = env
                     .get(&name)
                     .ok_or(TypeError::UnboundVariable(name, span))?;
                 let ty = self.instantiate(scheme);
                 Ok(Typed {
-                    kind: TypedKind::Var(krate, name),
+                    kind: TypedKind::Var(name),
                     ty,
                     span,
                 })
@@ -1205,11 +1205,7 @@ impl Inferrer {
 
             ResolvedKind::If(condition, consequent, alternative) => {
                 let typed_cond = self.infer_type(env, *condition)?;
-                self.unify(
-                    &typed_cond.ty,
-                    &Type::new(TypeKind::Con(BOOL_TYPE), Rc::new(Kind::Star)),
-                    typed_cond.span,
-                )?;
+                self.unify(&typed_cond.ty, &Type::simple(BOOL_TYPE), typed_cond.span)?;
 
                 let typed_cons = self.infer_type(env, *consequent)?;
                 let typed_alt = self.infer_type(env, *alternative)?;
@@ -1422,7 +1418,7 @@ impl Inferrer {
                     span,
                 })
             }
-            ResolvedKind::Constructor(krate, variant_id, ctor_id) => {
+            ResolvedKind::Constructor(variant_id, ctor_id) => {
                 let Some(variant) = self.variants.get(&variant_id) else {
                     return Err(TypeError::VariantNotFound(variant_id, span));
                 };
@@ -1433,7 +1429,6 @@ impl Inferrer {
                 let nullary = !matches!(&ty.ty, TypeKind::Function(_, _));
                 Ok(Typed {
                     kind: TypedKind::Constructor {
-                        krate,
                         variant: variant_id,
                         ctor: ctor_id,
                         nullary,
@@ -1457,7 +1452,7 @@ impl Inferrer {
                     let is_value = value.kind.is_syntactic_value();
                     for param_id in type_params {
                         let ty = Type::new(self.new_type(), self.new_kind());
-                        self.type_ctx.insert(param_id, ty);
+                        self.type_ctx.insert((None, param_id), ty);
                     }
 
                     let typed_value = self.infer_type(&env, *value)?;
@@ -1528,7 +1523,7 @@ impl Inferrer {
         let is_value = value.kind.is_syntactic_value();
         for param_id in type_params {
             let ty = Type::new(self.new_type(), self.new_kind());
-            self.type_ctx.insert(param_id, ty);
+            self.type_ctx.insert((None, param_id), ty);
         }
 
         let typed_value = self.infer_type(env, *value)?;

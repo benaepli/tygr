@@ -39,7 +39,7 @@ pub fn find_and_verify_main(
         let is_unit = |t: &Rc<crate::analysis::inference::Type>| matches!(t.as_ref().ty, TypeKind::Con(id) if id.0 == None && id.1 == crate::builtin::UNIT_TYPE);
 
         if is_unit(arg) {
-            return Ok(def.name.0);
+            return Ok(def.name.0.1);
         }
     }
 

@@ -40,7 +40,7 @@ pub struct ResolvedConstructor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedVariant {
     pub name: GlobalType,
-    pub type_params: Vec<TypeName>,
+    pub type_params: Vec<GlobalType>,
     pub constructors: HashMap<GlobalName, ResolvedConstructor>,
     pub span: Span,
 }
@@ -49,7 +49,7 @@ pub struct ResolvedVariant {
 pub struct ResolvedDefinition {
     pub name: (GlobalName, String),
     pub expr: Box<Resolved>,
-    pub type_params: Vec<TypeName>,
+    pub type_params: Vec<GlobalType>,
     pub annotation: Option<ResolvedAnnotation>,
     pub span: Span,
 }
@@ -65,7 +65,7 @@ pub type GlobalName = (Option<CrateId>, Name);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedPatternKind {
-    Var(Name),
+    Var(GlobalName),
     Unit,
     Pair(Box<ResolvedPattern>, Box<ResolvedPattern>),
     Wildcard,
@@ -162,7 +162,7 @@ pub enum ResolvedKind {
     RecordLit(HashMap<String, Resolved>),
 
     BinOp(BinOp, Box<Resolved>, Box<Resolved>),
-    RecRecord(HashMap<String, (Name, Resolved)>),
+    RecRecord(HashMap<String, (GlobalName, Resolved)>),
     FieldAccess(Box<Resolved>, String),
 
     Builtin(BuiltinFn),
@@ -203,7 +203,7 @@ impl ResolvedKind {
 #[derive(Debug, Clone)]
 pub struct ResolvedTypeAlias {
     pub name: GlobalType,
-    pub type_params: Vec<TypeName>,
+    pub type_params: Vec<GlobalType>,
     pub body: ResolvedAnnotation,
 }
 

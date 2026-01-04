@@ -64,7 +64,7 @@ pub fn compute_sccs(defs: &[ResolvedDefinition]) -> Vec<Vec<usize>> {
 }
 
 /// Recursively finds all free variables (dependencies) in a resolved expression.
-fn get_dependencies(expr: &Resolved) -> HashSet<Name> {
+fn get_dependencies(expr: &Resolved) -> HashSet<GlobalName> {
     match &expr.kind {
         ResolvedKind::Var(name) => {
             let mut set = HashSet::new();

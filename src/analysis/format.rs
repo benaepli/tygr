@@ -126,8 +126,8 @@ pub fn report_type_errors(
                     Label::primary(file_id, span.start..span.end)
                         .with_message(format!("recursive type: `'{}` occurs in `{}`", var, TypeDisplay::new(ty.clone(), name_table))),
                 ]),
-            TypeError::UnboundVariable(name, span) => {
-                let display_name = name_table.lookup_name(name);
+            TypeError::UnboundVariable(global_name, span) => {
+                let display_name = name_table.lookup_name(global_name);
                 Diagnostic::error()
                     .with_message(format!("unbound variable `{}`", display_name))
                     .with_labels(vec![
@@ -156,8 +156,8 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "field access is only allowed on record types".to_string(),
                 ]),
-            TypeError::VariantNotFound(variant_id, span) => {
-                let type_name = name_table.lookup_type_name(variant_id);
+            TypeError::VariantNotFound(global_variant, span) => {
+                let type_name = name_table.lookup_type_name(global_variant);
                 Diagnostic::error()
                     .with_message("variant type not found")
                     .with_labels(vec![
@@ -168,9 +168,9 @@ pub fn report_type_errors(
                         "this is an internal error - the variant type should have been registered during resolution".to_string(),
                     ])
             }
-            TypeError::ConstructorNotFound(variant_id, ctor_id, span) => {
-                let variant_name = name_table.lookup_type_name(variant_id);
-                let ctor_name = name_table.lookup_name(ctor_id);
+            TypeError::ConstructorNotFound(global_variant, global_ctor, span) => {
+                let variant_name = name_table.lookup_type_name(global_variant);
+                let ctor_name = name_table.lookup_name(global_ctor);
                 Diagnostic::error()
                     .with_message("constructor not found in type")
                     .with_labels(vec![
@@ -190,15 +190,18 @@ pub fn report_type_errors(
                 .with_notes(vec![
                     "constructors must have function types that take an argument and return the variant type".to_string(),
                 ]),
-            TypeError::UnknownTypeAlias(name, span) => Diagnostic::error()
-                .with_message(format!("unknown type alias `{}`", name))
-                .with_labels(vec![
-                    Label::primary(file_id, span.start..span.end)
-                        .with_message("type alias not found"),
-                ])
-                .with_notes(vec![
-                    "this type alias should have been resolved during the resolution phase".to_string(),
-                ]),
+            TypeError::UnknownTypeAlias(global_name, span) => {
+                let display_name = name_table.lookup_type_name(global_name);
+                Diagnostic::error()
+                    .with_message(format!("unknown type alias `{}`", display_name))
+                    .with_labels(vec![
+                        Label::primary(file_id, span.start..span.end)
+                            .with_message("type alias not found"),
+                    ])
+                    .with_notes(vec![
+                        "this type alias should have been resolved during the resolution phase".to_string(),
+                    ])
+            }
             TypeError::KindMismatch(found, expected, span) => Diagnostic::error()
                 .with_message("kind mismatch")
                 .with_labels(vec![
@@ -213,7 +216,7 @@ pub fn report_type_errors(
             TypeError::AliasCycle(cycle_path, span) => {
                 let cycle_str = cycle_path
                     .iter()
-                    .map(|id| name_table.lookup_type_name(id))
+                    .map(|global_id| name_table.lookup_type_name(global_id))
                     .collect::<Vec<_>>()
                     .join(" -> ");
                 Diagnostic::error()

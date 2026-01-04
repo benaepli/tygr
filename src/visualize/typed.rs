@@ -84,7 +84,8 @@ impl<'a> TypedAstVisualizer<'a> {
 
     fn visit_definition(&mut self, def: &TypedDefinition) {
         let scheme_str = self.scheme_str(&def.scheme);
-        self.write_line(&format!("Definition '{}' : {}", def.name.1, scheme_str));
+        let name_str = self.name_table.lookup_name(&def.name.0);
+        self.write_line(&format!("Definition '{}' : {}", name_str, scheme_str));
         self.indent += 1;
         self.visit_expr(&def.expr);
         self.indent -= 1;

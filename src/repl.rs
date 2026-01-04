@@ -88,11 +88,11 @@ impl Repl {
                 source,
             })?;
 
-        self.inferrer.register_custom_type(name_id, scheme.clone());
-        self.type_env.insert(name_id, scheme);
+        self.inferrer.register_custom_type((None, name_id), scheme.clone());
+        self.type_env.insert((None, name_id), scheme);
         let custom_id = self.custom_fns.register(name_id, func);
         self.runtime_env
-            .insert(name_id, Rc::new(Value::Custom(custom_id)));
+            .insert((None, name_id), Rc::new(Value::Custom(custom_id)));
 
         Ok(())
     }
