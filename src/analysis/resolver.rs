@@ -86,6 +86,10 @@ impl ResolveContext {
         id
     }
 
+    pub fn local_name_table(&self) -> LocalNameTable {
+        LocalNameTable::with_maps(self.name_origins.clone(), self.type_name_origins.clone())
+    }
+
     pub fn into_local_name_table(self) -> LocalNameTable {
         LocalNameTable::with_maps(self.name_origins, self.type_name_origins)
     }
@@ -95,7 +99,7 @@ impl ResolveContext {
 struct ScopeContext {
     scopes: Vec<Scope>,
     type_scopes: Vec<TypeScope>,
-    builtins: HashMap<Name, BuiltinFn>,
+    builtins: HashMap<GlobalName, BuiltinFn>,
     global_aliases: HashMap<String, TypeName>,
     global_variants: HashMap<String, TypeName>,
     global_constructors: HashMap<String, (TypeName, Name)>,
@@ -149,7 +153,13 @@ impl Resolver {
                     name: name_id,
                 },
             );
-            scope_ctx.builtins.insert(name_id, builtin.clone());
+            scope_ctx.builtins.insert(
+                GlobalName {
+                    krate: None,
+                    name: name_id,
+                },
+                builtin.clone(),
+            );
         }
         scope_ctx.scopes.push(global);
 
@@ -157,6 +167,10 @@ impl Resolver {
             global_ctx: ctx,
             scope_ctx,
         }
+    }
+
+    pub fn initial_name_table(&self) -> LocalNameTable {
+        self.global_ctx.local_name_table()
     }
 
     /// Register a custom function name in the global scope.
@@ -926,7 +940,7 @@ impl Resolver {
 
             debug_assert_eq!(self.scope_ctx.scopes.len(), 1, "Scope stack leaked!");
 
-            let (expr, _free) = Self::analyze(&mut self.global_ctx, &mut self.scope_ctx, def.expr)?;
+            let (expr, _free) = Self::analyze(&mut ctx, &mut self.scope_ctx, def.expr)?;
             self.scope_ctx.type_scopes.pop();
             resolved.definitions.insert(
                 id,
@@ -1270,7 +1284,7 @@ impl Resolver {
                 if let Some(name) = path.simple() {
                     for scope in scope_ctx.scopes.iter().rev() {
                         if let Some(id) = scope.get(name) {
-                            if let Some(builtin) = scope_ctx.builtins.get(&id.name) {
+                            if let Some(builtin) = scope_ctx.builtins.get(id) {
                                 return Ok((
                                     Resolved::new(ResolvedKind::Builtin(builtin.clone()), span),
                                     HashSet::new(),

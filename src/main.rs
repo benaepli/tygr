@@ -16,6 +16,7 @@ use tygr::visualize::constructor::visualize_constructor_ir;
 use tygr::visualize::typed::TypedAstVisualizer;
 
 use tygr::manifest::{Manifest, ProjectType};
+use tygr::module::CrateCompiler;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -92,8 +93,7 @@ fn main() {
                             );
                             process::exit(1);
                         }
-                        let root = manifest.crate_root(&current_dir);
-                        run_program(&root);
+                        run_project(&manifest_path);
                     }
                     Err(e) => {
                         eprintln!(
@@ -250,5 +250,52 @@ fn run_script(path: &PathBuf) {
             "Program result: {}",
             ValueDisplay::new(&result, &name_table)
         );
+    }
+}
+
+fn run_project(manifest_path: &PathBuf) {
+    let mut compiler = CrateCompiler::new();
+    let mut writer = StandardStream::stderr(ColorChoice::Auto);
+
+    let crates = match compiler.compile_project(manifest_path) {
+        Err(e) => {
+            let _ = tygr::module::format::report_compile_error(&mut writer, &compiler, &e);
+            process::exit(1);
+        }
+        Ok(c) => c,
+    };
+
+    let mut env = interpreter::Environment::new();
+    let custom_fns = CustomFnRegistry::new();
+
+    // Evaluate all crates in order. The last one is the root binary crate.
+    for krate in &crates {
+        if let Err(e) = eval_groups(&mut env, krate.groups.clone(), &custom_fns) {
+            eprintln!("Runtime error (crate {}): {}", krate.crate_id.0, e);
+            process::exit(1);
+        }
+    }
+
+    let root_crate = crates
+        .last()
+        .expect("at least one crate should be compiled");
+    let name_table = compiler.name_table();
+
+    let main_name = match find_and_verify_main(&root_crate.groups, name_table) {
+        Ok(name) => name,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        }
+    };
+
+    match interpreter::run_main(&mut env, main_name, &custom_fns) {
+        Ok(result) => {
+            println!("Program result: {}", ValueDisplay::new(&result, name_table));
+        }
+        Err(e) => {
+            eprintln!("Runtime error: {}", e);
+            process::exit(1);
+        }
     }
 }

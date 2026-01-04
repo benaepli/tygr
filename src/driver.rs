@@ -2,6 +2,7 @@ use crate::lexer::TokenKind;
 use crate::lexer::{self, LexError};
 use crate::parser;
 use crate::parser::{Declaration, SourceId, Span};
+use crate::sources::FileSources;
 use bimap::BiMap;
 use chumsky::error::Rich;
 use std::collections::HashMap;
@@ -128,6 +129,7 @@ fn load_inline_module(
     ast: Vec<Declaration>,
     source_id: SourceId,
     depth: usize,
+    sources: &mut FileSources,
 ) -> Result<ModuleId, LoadError> {
     if depth >= RECURSION_LIMIT {
         return Err(LoadError::RecursionLimitReached {
@@ -172,6 +174,7 @@ fn load_inline_module(
                             nested_ast.clone(),
                             source_id, // Inline modules share the same source_id as their parent
                             depth + 1,
+                            sources,
                         )?;
                     }
                     None => {
@@ -191,6 +194,7 @@ fn load_inline_module(
                             Some(id),
                             Some(*span),
                             depth + 1,
+                            sources,
                         )?;
                     }
                 }
@@ -225,6 +229,7 @@ fn load_after_root(
     parent: Option<ModuleId>,
     parent_span: Option<Span>,
     depth: usize,
+    sources: &mut FileSources,
 ) -> Result<ModuleId, LoadError> {
     let source_id = state.new_source_id();
 
@@ -241,6 +246,8 @@ fn load_after_root(
             error: e,
             module_span: parent_span,
         })?;
+
+    sources.add(source_id, file_path.as_str(), content.clone());
 
     let mut lexer = lexer::Lexer::new(&content, source_id);
     let (tokens, lex_errors) = lexer.collect_all();
@@ -281,10 +288,15 @@ fn load_after_root(
         ast,
         source_id,
         depth,
+        sources,
     )
 }
 
-pub fn load_module(root_directory: &VfsPath, root_path: &VfsPath) -> Result<Crate, LoadError> {
+pub fn load_module(
+    root_directory: &VfsPath,
+    root_path: &VfsPath,
+    sources: &mut FileSources,
+) -> Result<Crate, LoadError> {
     let mut state = LoadState::default();
     let id = load_after_root(
         &mut state,
@@ -294,6 +306,7 @@ pub fn load_module(root_directory: &VfsPath, root_path: &VfsPath) -> Result<Crat
         None,
         None,
         0,
+        sources,
     )?;
     Ok(Crate {
         modules: state.modules,

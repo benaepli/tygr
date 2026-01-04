@@ -1,7 +1,10 @@
 # Tygr
 
-Tygr is a small, statically-typed functional programming language with an interpreter written in Rust. It features a
-robust type system based on Hindley-Milner type inference, supporting modern functional programming paradigms.
+Tygr is a statically-typed functional programming language. It features a
+robust type system with higher-kinded types based on Hindley-Milner type inference.
+
+In addition to the core language, it supports a Rust-like module system, strong error reporting, as well as a REPL
+that runs in WASM (on my website!).
 
 ## Features
 
@@ -43,16 +46,82 @@ cargo build --release
 
 ### Running Programs
 
-You can interpret Tygr source files directly using `cargo run`.
+Tygr provides a CLI with several subcommands to run and inspect your code.
+
+#### REPL
+
+Start the interactive Read-Eval-Print Loop (REPL) by running:
 
 ```bash
-cargo run -- examples/scripts/reduce.tygr
+cargo run -- repl
+# opr simply
+cargo run
 ```
 
-Running without any input arguments will launch a REPL:
+#### Scripts
+
+Run a standalone Tygr script (a file containing a sequence of statements) using the `script` subcommand:
 
 ```bash
-cargo run
+cargo run -- script examples/scripts/factorial.tygr
+```
+
+#### Projects & Binaries
+
+To run a full Tygr project (defined by a `Tygr.toml` manifest) or a standalone program file (requiring a `main`
+function):
+
+**Run the project in the current directory:**
+
+```bash
+cargo run -- run
+```
+
+**Run a specific standalone program file:**
+
+```bash
+cargo run -- run --file examples/crates/basic_binary/src/main.tygr
+```
+
+#### Visualization
+
+You can visualize the intermediate representations (IR) of the compiler:
+
+```bash
+# Visualize the Typed AST
+cargo run -- visualize typed examples/programs/bst.tygr
+cargo run -- visualize closure examples/programs/bst.tygr
+cargo run -- visualize constructor examples/programs/bst.tygr
+```
+
+## Project System
+
+Tygr supports a crate-based project system similar to Rust's. A project is defined by a `Tygr.toml` manifest file.
+
+### Manifest (`Tygr.toml`)
+
+```toml
+[project]
+name = "my_project"
+type = "binary" # or "lib"
+
+[dependencies]
+# Map an alias to a local path
+my_lib = "../path/to/my_lib"
+```
+
+### Directory Structure
+
+- **Binary Projects**: Source code entry point is `src/main.tygr`.
+- **Library Projects**: Source code entry point is `src/lib.tygr`.
+
+Example structure:
+
+```text
+my_project/
+├── Tygr.toml
+└── src/
+    └── main.tygr
 ```
 
 ## Examples

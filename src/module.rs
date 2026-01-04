@@ -3,17 +3,20 @@
 //! This module provides `CrateCompiler`, a struct that coordinates loading,
 //! name resolution, and type inference across one or more crates.
 
+pub mod format;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use vfs::{PhysicalFS, VfsPath};
 
-use crate::analysis::inference::{Inferrer, TypeError, TypedCrate};
+use crate::analysis::inference::{Environment, Inferrer, TypeError, TypedCrate};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{CrateId, GlobalName, GlobalType, ResolutionError, Resolver};
 use crate::driver::{self, LoadError};
 use crate::ir::closure;
 use crate::manifest::{Manifest, ManifestError};
+use crate::sources::FileSources;
 
 /// Errors that can occur during crate compilation.
 #[derive(Debug, Error)]
@@ -48,6 +51,10 @@ pub struct CrateCompiler {
     next_crate_id: CrateId,
     /// Map from canonical manifest path to CrateId (avoid recompiling)
     compiled_crates: HashMap<PathBuf, CrateId>,
+    /// Accumulated source files for all crates (for error reporting)
+    sources: FileSources,
+    /// Accumulated type environment (type schemes of exported definitions)
+    env: Environment,
 }
 
 impl Default for CrateCompiler {
@@ -59,13 +66,21 @@ impl Default for CrateCompiler {
 impl CrateCompiler {
     /// Create a new crate compiler.
     pub fn new() -> Self {
+        let resolver = Resolver::new();
         Self {
-            resolver: Resolver::new(),
+            name_table: NameTable::with_global(resolver.initial_name_table()),
+            resolver,
             inferrer: Inferrer::new(),
-            name_table: NameTable::new(),
             next_crate_id: CrateId(0),
             compiled_crates: HashMap::new(),
+            sources: FileSources::new(),
+            env: Environment::new(),
         }
+    }
+
+    /// Get the accumulated source files (for error reporting).
+    pub fn sources(&self) -> &FileSources {
+        &self.sources
     }
 
     /// Get the accumulated name table (for error reporting).
@@ -123,7 +138,7 @@ impl CrateCompiler {
             .join(file_name)
             .map_err(|e| CompileError::Path(format!("VFS error: {}", e)))?;
 
-        let krate = driver::load_module(&vfs_root, &vfs_file)?;
+        let krate = driver::load_module(&vfs_root, &vfs_file, &mut self.sources)?;
         let crate_id = self.alloc_crate_id();
 
         let extern_prelude = HashMap::new(); // Empty for now, will be populated for multi-crate
@@ -136,8 +151,8 @@ impl CrateCompiler {
         let local_table = resolve_ctx.into_local_name_table();
         self.name_table.add(Some(crate_id), local_table);
 
-        let env = HashMap::new();
-        let (typed_crate, _final_env) = self.inferrer.infer_crate(prepared, env)?;
+        let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
+        self.env = final_env;
 
         Ok(typed_crate)
     }
@@ -178,8 +193,11 @@ impl CrateCompiler {
     /// Compile a project from its Tygr.toml manifest.
     ///
     /// Automatically compiles dependencies first (topologically sorted) and builds extern_prelude.
-    /// Returns the TypedCrate for the root project.
-    pub fn compile_project(&mut self, manifest_path: &Path) -> Result<TypedCrate, CompileError> {
+    /// Returns the TypedCrate for the root project and all its dependencies in topological order.
+    pub fn compile_project(
+        &mut self,
+        manifest_path: &Path,
+    ) -> Result<Vec<TypedCrate>, CompileError> {
         use petgraph::algo::toposort;
         use petgraph::graph::{DiGraph, NodeIndex};
 
@@ -187,12 +205,6 @@ impl CrateCompiler {
         let manifest_path = manifest_path
             .canonicalize()
             .map_err(|e| CompileError::Path(format!("cannot canonicalize manifest: {}", e)))?;
-
-        // If already compiled, we can't return the TypedCrate again (it was consumed),
-        // but we shouldn't hit this case for the root project.
-        if self.compiled_crates.contains_key(&manifest_path) {
-            return Err(CompileError::Path("project already compiled".to_string()));
-        }
 
         // Build dependency graph: nodes are canonical manifest paths
         let mut graph: DiGraph<PathBuf, String> = DiGraph::new();
@@ -235,14 +247,10 @@ impl CrateCompiler {
                 if !self.compiled_crates.contains_key(&dep_manifest_path) {
                     stack.push(dep_manifest_path.clone());
                 }
-
-                // We'll add edges after all nodes are discovered
             }
         }
 
         // Second pass: add edges (dependency -> dependent, for toposort order)
-        // toposort returns nodes in order such that for every edge (u, v), u comes before v
-        // We want dependencies compiled first, so edge direction: dependency -> dependent
         for (path, &idx) in &path_to_idx {
             let manifest = &idx_to_manifest[&idx];
             let manifest_dir = path.parent().unwrap();
@@ -254,7 +262,7 @@ impl CrateCompiler {
                     .canonicalize()
                     .unwrap();
 
-                // Check if dep is already compiled
+                // Check if dep is in our current graph
                 if let Some(&dep_idx) = path_to_idx.get(&dep_manifest_path) {
                     // Validate: dependency must be a library
                     let dep_manifest = &idx_to_manifest[&dep_idx];
@@ -266,7 +274,6 @@ impl CrateCompiler {
                     // Edge from dependency to dependent (dep should be compiled first)
                     graph.add_edge(dep_idx, idx, alias.clone());
                 }
-                // If dep is already compiled, no need to add to graph
             }
         }
 
@@ -274,7 +281,7 @@ impl CrateCompiler {
         let sorted = toposort(&graph, None).map_err(|_| CompileError::DependencyCycle)?;
 
         // Compile in topological order, building extern_prelude maps
-        let mut typed_crates: HashMap<PathBuf, TypedCrate> = HashMap::new();
+        let mut all_typed_crates = Vec::new();
 
         for idx in sorted {
             let path = &graph[idx];
@@ -308,20 +315,10 @@ impl CrateCompiler {
 
             // Compile this crate
             let typed = self.compile_crate_with_prelude(&crate_root, extern_prelude)?;
-
-            // Record the canonical path -> CrateId mapping
-            // Note: typed.crate_id gives us the ID we just allocated
-            // We need to get it from the resolver or track it differently
-            // Actually, compile_crate_with_prelude already allocates the ID internally
-            // Let's store it before the last typed_crate is consumed
-
-            typed_crates.insert(path.clone(), typed);
+            all_typed_crates.push(typed);
         }
 
-        // Return the root project's TypedCrate
-        typed_crates
-            .remove(&manifest_path)
-            .ok_or_else(|| CompileError::Path("root project not compiled".to_string()))
+        Ok(all_typed_crates)
     }
 
     /// Compile a crate with an explicit extern_prelude.
@@ -353,7 +350,7 @@ impl CrateCompiler {
             .join(file_name)
             .map_err(|e| CompileError::Path(format!("VFS error: {}", e)))?;
 
-        let krate = driver::load_module(&vfs_root, &vfs_file)?;
+        let krate = driver::load_module(&vfs_root, &vfs_file, &mut self.sources)?;
         let crate_id = self.alloc_crate_id();
 
         // Store the mapping from crate root path to crate id
@@ -378,8 +375,8 @@ impl CrateCompiler {
         let local_table = resolve_ctx.into_local_name_table();
         self.name_table.add(Some(crate_id), local_table);
 
-        let env = HashMap::new();
-        let (typed_crate, _final_env) = self.inferrer.infer_crate(prepared, env)?;
+        let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
+        self.env = final_env;
 
         Ok(typed_crate)
     }
