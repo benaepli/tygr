@@ -166,7 +166,7 @@ pub struct ResolvedStatement {
     pub pattern: ResolvedPattern,
     pub value: Box<Resolved>,
     pub value_type: Option<ResolvedAnnotation>,
-    pub type_params: Vec<TypeName>,
+    pub type_params: Vec<GlobalType>,
     pub span: Span,
 }
 

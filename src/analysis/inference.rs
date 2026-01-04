@@ -1465,13 +1465,7 @@ impl Inferrer {
                     let is_value = value.kind.is_syntactic_value();
                     for param_id in type_params {
                         let ty = Type::new(self.new_type(), self.new_kind());
-                        self.type_ctx.insert(
-                            GlobalType {
-                                krate: None,
-                                name: param_id,
-                            },
-                            ty,
-                        );
+                        self.type_ctx.insert(param_id, ty);
                     }
 
                     let typed_value = self.infer_type(&env, *value)?;
@@ -1542,13 +1536,7 @@ impl Inferrer {
         let is_value = value.kind.is_syntactic_value();
         for param_id in type_params {
             let ty = Type::new(self.new_type(), self.new_kind());
-            self.type_ctx.insert(
-                GlobalType {
-                    krate: None,
-                    name: param_id,
-                },
-                ty,
-            );
+            self.type_ctx.insert(param_id, ty);
         }
 
         let typed_value = self.infer_type(env, *value)?;
