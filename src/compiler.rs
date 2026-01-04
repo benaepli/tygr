@@ -12,6 +12,7 @@ use crate::parser::{
     Declaration, Definition, ReplStatement, SourceId, Statement, TypeAlias, Variant, parse_program,
     parse_script,
 };
+use crate::sources::FileSources;
 use crate::{lexer, parser};
 use anyhow::anyhow;
 use codespan_reporting::term::WriteStyle;
@@ -54,15 +55,17 @@ pub fn compile_script(
     name: &str,
     writer: &mut impl WriteStyle,
 ) -> Result<(Vec<TypedStatement>, NameTable), anyhow::Error> {
+    let files = FileSources::single(name, input);
+
     let mut lexer = Lexer::new(input, SourceId::SYNTHETIC);
     let (lexed, errors) = lexer.collect_all();
-    lexer::format::report_errors(writer, input, &errors, name)?;
+    lexer::format::report_errors(writer, &files, &errors)?;
     if !errors.is_empty() {
         return Err(errors[0].clone().into());
     }
     let parsed = parse_script(&lexed);
     if parsed.has_errors() {
-        parser::format::report_errors(writer, input, parsed.errors(), name)?;
+        parser::format::report_errors(writer, &files, parsed.errors())?;
         return Err(anyhow!("parsing error"));
     }
     let output = match parsed.into_output() {
@@ -74,13 +77,13 @@ pub fn compile_script(
     let mut resolver = Resolver::new();
     for variant in &variants {
         if let Err(e) = resolver.declare_global_variant(variant) {
-            report_resolution_errors(writer, input, &[e], name)?;
+            report_resolution_errors(writer, &files, &[e])?;
             return Err(anyhow!("resolution error"));
         }
     }
     for alias in &aliases {
         if let Err(e) = resolver.declare_global_type_alias(alias) {
-            report_resolution_errors(writer, input, &[e], name)?;
+            report_resolution_errors(writer, &files, &[e])?;
             return Err(anyhow!("resolution error"));
         }
     }
@@ -88,7 +91,7 @@ pub fn compile_script(
     for alias in aliases {
         match resolver.define_global_type_alias(alias) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(r) => resolved_aliases.push(r),
@@ -98,7 +101,7 @@ pub fn compile_script(
     for variant in variants {
         match resolver.define_global_variant(variant) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(v) => resolved_variants.push(v),
@@ -108,7 +111,7 @@ pub fn compile_script(
     for stmt in statements {
         match resolver.resolve_global_statement(stmt) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(r) => resolved_statements.push(r),
@@ -121,7 +124,7 @@ pub fn compile_script(
     for alias in resolved_aliases {
         match inferrer.register_alias(alias) {
             Err(e) => {
-                report_type_errors(writer, input, &[e], name, &name_table)?;
+                report_type_errors(writer, &files, &[e], &name_table)?;
                 return Err(anyhow!("type inference error"));
             }
             Ok(_) => {}
@@ -130,7 +133,7 @@ pub fn compile_script(
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {
-                report_type_errors(writer, input, &[e], name, &name_table)?;
+                report_type_errors(writer, &files, &[e], &name_table)?;
                 return Err(anyhow!("type inference error"));
             }
             Ok(t) => t,
@@ -141,7 +144,7 @@ pub fn compile_script(
     for stmt in resolved_statements {
         match inferrer.infer_global_statement(&mut env, stmt) {
             Err(e) => {
-                report_type_errors(writer, input, &[e], name, &name_table)?;
+                report_type_errors(writer, &files, &[e], &name_table)?;
                 return Err(anyhow!("type inference error"));
             }
             Ok(t) => typed_statements.push(t),
@@ -164,15 +167,17 @@ pub fn compile_typed_program(
     name: &str,
     writer: &mut impl WriteStyle,
 ) -> Result<TypedProgram, anyhow::Error> {
+    let files = FileSources::single(name, input);
+
     let mut lexer = Lexer::new(input, SourceId::SYNTHETIC);
     let (lexed, errors) = lexer.collect_all();
-    lexer::format::report_errors(writer, input, &errors, name)?;
+    lexer::format::report_errors(writer, &files, &errors)?;
     if !errors.is_empty() {
         return Err(errors[0].clone().into());
     }
     let parsed = parse_program(&lexed);
     if parsed.has_errors() {
-        parser::format::report_errors(writer, input, parsed.errors(), name)?;
+        parser::format::report_errors(writer, &files, parsed.errors())?;
         return Err(anyhow!("parsing error"));
     }
     let output = match parsed.into_output() {
@@ -182,20 +187,20 @@ pub fn compile_typed_program(
 
     let (definitions, variants, aliases) = split_program(output);
     if let Err(e) = check_static_definitions(&definitions) {
-        report_initial_analysis_errors(writer, input, &[e], name)?;
+        report_initial_analysis_errors(writer, &files, &[e])?;
         return Err(anyhow!("initial analysis error"));
     }
 
     let mut resolver = Resolver::new();
     for variant in &variants {
         if let Err(e) = resolver.declare_global_variant(variant) {
-            report_resolution_errors(writer, input, &[e], name)?;
+            report_resolution_errors(writer, &files, &[e])?;
             return Err(anyhow!("resolution error"));
         }
     }
     for alias in &aliases {
         if let Err(e) = resolver.declare_global_type_alias(alias) {
-            report_resolution_errors(writer, input, &[e], name)?;
+            report_resolution_errors(writer, &files, &[e])?;
             return Err(anyhow!("resolution error"));
         }
     }
@@ -203,7 +208,7 @@ pub fn compile_typed_program(
     for alias in aliases {
         match resolver.define_global_type_alias(alias) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(a) => resolved_aliases.push(a),
@@ -213,7 +218,7 @@ pub fn compile_typed_program(
     for variant in variants {
         match resolver.define_global_variant(variant) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(v) => resolved_variants.push(v),
@@ -221,7 +226,7 @@ pub fn compile_typed_program(
     }
     for definition in &definitions {
         if let Err(e) = resolver.declare_global_definition(definition) {
-            report_resolution_errors(writer, input, &[e], name)?;
+            report_resolution_errors(writer, &files, &[e])?;
             return Err(anyhow!("resolution error"));
         }
     }
@@ -229,7 +234,7 @@ pub fn compile_typed_program(
     for definition in definitions {
         match resolver.define_global_definition(definition) {
             Err(e) => {
-                report_resolution_errors(writer, input, &[e], name)?;
+                report_resolution_errors(writer, &files, &[e])?;
                 return Err(anyhow!("resolution error"));
             }
             Ok(d) => resolved_definitions.push(d),
@@ -244,7 +249,7 @@ pub fn compile_typed_program(
     for alias in resolved_aliases {
         match inferrer.register_alias(alias) {
             Err(e) => {
-                report_type_errors(writer, input, &[e], name, &name_table)?;
+                report_type_errors(writer, &files, &[e], &name_table)?;
                 return Err(anyhow!("type inference error"));
             }
             Ok(_) => {}
@@ -253,7 +258,7 @@ pub fn compile_typed_program(
     for variant in resolved_variants {
         match inferrer.register_variant(variant) {
             Err(e) => {
-                report_type_errors(writer, input, &[e], name, &name_table)?;
+                report_type_errors(writer, &files, &[e], &name_table)?;
                 return Err(anyhow!("type inference error"));
             }
             Ok(t) => t,
@@ -262,7 +267,7 @@ pub fn compile_typed_program(
     let env = Environment::default();
     let (groups, _) = match inferrer.infer_definitions(reordered, env) {
         Err(e) => {
-            report_type_errors(writer, input, &[e], name, &name_table)?;
+            report_type_errors(writer, &files, &[e], &name_table)?;
             return Err(anyhow!("type inference error"));
         }
         Ok(t) => t,

@@ -237,9 +237,9 @@ fn is_special_char(ch: char) -> bool {
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum LexError {
     #[error("unexpected character")]
-    UnexpectedChar(usize),
+    UnexpectedChar(usize, SourceId),
     #[error("unterminated string")]
-    UnterminatedString(usize),
+    UnterminatedString(usize, SourceId),
 }
 
 /// A lexical analyzer that converts source code into a stream of tokens.
@@ -323,7 +323,7 @@ impl<'a> Lexer<'a> {
             let ch = self
                 .input
                 .next()
-                .ok_or(LexError::UnterminatedString(start))?;
+                .ok_or(LexError::UnterminatedString(start, self.source))?;
             self.position += 1;
             match ch {
                 '"' => return Ok(TokenKind::String(value)),
@@ -339,7 +339,7 @@ impl<'a> Lexer<'a> {
                             value.push(ch);
                         }
                         None => {
-                            return Err(LexError::UnterminatedString(start));
+                            return Err(LexError::UnterminatedString(start, self.source));
                         }
                     }
                 }
@@ -375,12 +375,12 @@ impl<'a> Lexer<'a> {
             num_str
                 .parse()
                 .map(TokenKind::Float)
-                .map_err(|_| LexError::UnexpectedChar(start))
+                .map_err(|_| LexError::UnexpectedChar(start, self.source))
         } else {
             num_str
                 .parse()
                 .map(TokenKind::Integer)
-                .map_err(|_| LexError::UnexpectedChar(start))
+                .map_err(|_| LexError::UnexpectedChar(start, self.source))
         }
     }
 
@@ -502,7 +502,7 @@ impl<'a> Iterator for Lexer<'a> {
                 if self.match_next('&') {
                     Ok(TokenKind::And)
                 } else {
-                    Err(LexError::UnexpectedChar(start))
+                    Err(LexError::UnexpectedChar(start, self.source))
                 }
             }
 

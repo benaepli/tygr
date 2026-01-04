@@ -1,6 +1,7 @@
 mod ast;
 pub use ast::*;
 
+use crate::analysis::name_table::NameTable;
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::driver::{Crate, ModuleId};
 use crate::parser::{
@@ -29,13 +30,19 @@ pub enum ResolutionError {
     DuplicateConstructor(String, Span),
     #[error("constructor `{0}` not found")]
     ConstructorNotFound(String, Span),
+    #[error("`super` goes past the crate root")]
+    SuperPastRoot(Span),
+    #[error("module `{0}` not found")]
+    ModuleNotFound(String, Span),
+    #[error("item `{0}` is private")]
+    PrivateItemAccess(String, Span),
 }
 
 type Scope = HashMap<String, GlobalName>;
 type TypeScope = HashMap<String, GlobalType>;
 
 #[derive(Debug)]
-struct ResolveContext {
+pub struct ResolveContext {
     crate_id: Option<CrateId>,
     module_id: Option<ModuleId>,
     next_id: Name,
@@ -75,6 +82,10 @@ impl ResolveContext {
         self.next_type = TypeName(self.next_type.0 + 1);
         self.type_name_origins.insert(id, original_name);
         id
+    }
+
+    pub fn into_name_table(self) -> NameTable {
+        NameTable::with_maps(self.name_origins, self.type_name_origins)
     }
 }
 
@@ -770,7 +781,10 @@ impl Resolver {
         Ok(())
     }
 
-    fn resolve_bodies(&mut self, resolved: &mut CrateDefMap) -> Result<(), ResolutionError> {
+    fn resolve_bodies(
+        &mut self,
+        resolved: &mut CrateDefMap,
+    ) -> Result<ResolveContext, ResolutionError> {
         let mut ctx = ResolveContext {
             crate_id: Some(resolved.crate_id),
             ..Default::default()
@@ -930,7 +944,7 @@ impl Resolver {
             );
         }
 
-        Ok(())
+        Ok(ctx)
     }
 
     pub fn resolve_crate(
@@ -938,7 +952,7 @@ impl Resolver {
         id: CrateId,
         mut krate: Crate,
         extern_prelude: ExternPrelude,
-    ) -> Result<(), ResolutionError> {
+    ) -> Result<ResolveContext, ResolutionError> {
         // We use two phases. First is declaration.
         let mut resolved = CrateDefMap {
             crate_id: id,
@@ -1000,10 +1014,10 @@ impl Resolver {
 
         // Second pass: definition
         self.resolve_imports(&mut resolved)?;
-        self.resolve_bodies(&mut resolved)?;
+        let ctx = self.resolve_bodies(&mut resolved)?;
 
         self.scope_ctx.world.crates.insert(id, resolved);
-        Ok(())
+        Ok(ctx)
     }
 
     pub fn resolve_global_statement(
@@ -1596,7 +1610,7 @@ impl Resolver {
         )
     }
 
-    /// Extract the NameTable from this resolver.
+    /// Extract the global NameTable from this resolver.
     /// This consumes the resolver's name origin maps and returns them as a NameTable
     /// for use in error formatting and debugging.
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {

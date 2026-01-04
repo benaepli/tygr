@@ -8,5 +8,6 @@ pub mod ir;
 pub mod lexer;
 pub mod parser;
 pub mod repl;
+pub mod sources;
 pub mod visualize;
 pub mod web;

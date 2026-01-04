@@ -2,11 +2,12 @@ use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{GlobalName, GlobalType, ResolutionError, Resolver};
+use crate::analysis::resolver::{GlobalName, ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
 use crate::parser::{ReplStatement, SourceId, Span, make_input};
+use crate::sources::FileSources;
 use crate::visualize::typed::TypedAstVisualizer;
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
@@ -223,11 +224,12 @@ impl Repl {
 
     pub fn process_line(&mut self, source: &str, writer: &mut impl WriteColor) {
         let name = "<repl>";
+        let files = FileSources::single(name, source);
 
         let mut lexer = Lexer::new(source, SourceId::SYNTHETIC);
         let (tokens, lex_errors) = lexer.collect_all();
         if !lex_errors.is_empty() {
-            let _ = lexer::format::report_errors(writer, source, &lex_errors, name);
+            let _ = lexer::format::report_errors(writer, &files, &lex_errors);
             return;
         }
 
@@ -240,18 +242,17 @@ impl Repl {
             &tokens,
         );
         let Ok(decl) = parser::repl().parse(input).into_result().map_err(|e| {
-            let _ = parser::format::report_errors(writer, source, e.iter(), name);
+            let _ = parser::format::report_errors(writer, &files, e.iter());
         }) else {
             return;
         };
 
-        self.execute_declaration(source, name, decl, writer);
+        self.execute_declaration(&files, decl, writer);
     }
 
     fn execute_declaration(
         &mut self,
-        source: &str,
-        name: &str,
+        files: &FileSources,
         decl: ReplStatement,
         writer: &mut impl WriteColor,
     ) {
@@ -266,11 +267,11 @@ impl Repl {
 
                 match res {
                     Err(e) => {
-                        let _ = report_resolution_errors(writer, source, &[e], name);
+                        let _ = report_resolution_errors(writer, files, &[e]);
                     }
                     Ok(resolved) => {
                         if let Err(e) = self.inferrer.register_alias(resolved) {
-                            let _ = report_type_errors(writer, source, &[e], name, &name_table);
+                            let _ = report_type_errors(writer, files, &[e], &name_table);
                         }
                     }
                 }
@@ -284,31 +285,30 @@ impl Repl {
 
                 match res {
                     Err(e) => {
-                        let _ = report_resolution_errors(writer, source, &[e], name);
+                        let _ = report_resolution_errors(writer, files, &[e]);
                     }
                     Ok(resolved) => {
                         if let Err(e) = self.inferrer.register_variant(resolved) {
-                            let _ = report_type_errors(writer, source, &[e], name, &name_table);
+                            let _ = report_type_errors(writer, files, &[e], &name_table);
                         }
                     }
                 }
             }
 
-            ReplStatement::Statement(stmt) => self.execute_statement(source, name, stmt, writer),
+            ReplStatement::Statement(stmt) => self.execute_statement(files, stmt, writer),
         }
     }
 
     fn execute_statement(
         &mut self,
-        source: &str,
-        name: &str,
+        files: &FileSources,
         stmt: parser::Statement,
         writer: &mut impl WriteColor,
     ) {
         let resolved = match self.resolver.resolve_global_statement(stmt) {
             Ok(s) => s,
             Err(e) => {
-                let _ = report_resolution_errors(writer, source, &[e], name);
+                let _ = report_resolution_errors(writer, files, &[e]);
                 return;
             }
         };
@@ -320,7 +320,7 @@ impl Repl {
             Ok(s) => s,
             Err(e) => {
                 let nt = self.resolver.snapshot_name_table();
-                let _ = report_type_errors(writer, source, &[e], name, &nt);
+                let _ = report_type_errors(writer, files, &[e], &nt);
                 return;
             }
         };

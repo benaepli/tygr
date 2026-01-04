@@ -241,13 +241,13 @@ pub struct ResolvedTypeAlias {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum DefinitionInfo {
+pub enum DefinitionInfo {
     Definition(Name),
     Constructor(TypeName, Name),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum TypeInfo {
+pub enum TypeInfo {
     Alias(TypeName),
     Variant(TypeName),
 }
@@ -367,7 +367,7 @@ impl World {
                     if let Some(parent) = mod_data.parent {
                         current_module = parent;
                     } else {
-                        todo!()
+                        return Err(ResolutionError::SuperPastRoot(path.span));
                     }
                 }
             }
@@ -397,6 +397,7 @@ impl World {
                                 current_module,
                                 start_crate,
                                 start_module,
+                                path.span,
                             )?;
                             match info {
                                 DefinitionInfo::Definition(id) => {
@@ -428,6 +429,7 @@ impl World {
                                 current_module,
                                 start_crate,
                                 start_module,
+                                path.span,
                             )?;
                             match info {
                                 TypeInfo::Variant(variant) => {
@@ -446,7 +448,7 @@ impl World {
                         }
                     }
                 }
-                todo!()
+                return Err(ResolutionError::VariableNotFound(path.clone(), path.span));
             } else {
                 if let Some((next_crate, next_mod_id, vis)) = mod_data.modules.get(segment_name) {
                     self.check_visibility(
@@ -455,16 +457,20 @@ impl World {
                         *next_mod_id,
                         start_crate,
                         start_module,
+                        path.span,
                     )?;
                     current_crate = *next_crate;
                     current_module = *next_mod_id;
                 } else {
-                    todo!()
+                    return Err(ResolutionError::ModuleNotFound(
+                        segment_name.clone(),
+                        path.span,
+                    ));
                 }
             }
         }
 
-        todo!()
+        Err(ResolutionError::VariableNotFound(path.clone(), path.span))
     }
 
     fn check_visibility(
@@ -474,12 +480,16 @@ impl World {
         def_module: ModuleId,
         user_crate: CrateId,
         user_module: ModuleId,
+        span: Span,
     ) -> Result<(), ResolutionError> {
         match vis {
             Visibility::Public => Ok(()),
             Visibility::Private => {
                 if def_crate != user_crate {
-                    todo!()
+                    return Err(ResolutionError::PrivateItemAccess(
+                        "cross-crate private item".to_string(),
+                        span,
+                    ));
                 }
                 let def_scope = self.crates[&def_crate].modules[&def_module].scope;
                 let user_scope = self.crates[&user_crate].modules[&user_module].scope;
@@ -487,7 +497,10 @@ impl World {
                 if def_scope.entry <= user_scope.entry && def_scope.exit >= user_scope.exit {
                     Ok(())
                 } else {
-                    todo!()
+                    Err(ResolutionError::PrivateItemAccess(
+                        "item outside accessible scope".to_string(),
+                        span,
+                    ))
                 }
             }
         }

@@ -1,36 +1,32 @@
 use crate::lexer::LexError;
+use crate::sources::FileSources;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
-use codespan_reporting::files::SimpleFiles;
 use codespan_reporting::term;
 use codespan_reporting::term::WriteStyle;
 
 /// Reports lexer errors using codespan-reporting.
 ///
-/// This function takes a source string and a list of lexer errors, and prints
+/// This function takes a FileSources and a list of lexer errors, and prints
 /// nicely formatted error messages with source code context to the provided writer.
 pub fn report_errors(
     writer: &mut impl WriteStyle,
-    source: &str,
+    files: &FileSources,
     errors: &[LexError],
-    filename: &str,
 ) -> Result<(), codespan_reporting::files::Error> {
-    let mut files = SimpleFiles::new();
-    let file_id = files.add(filename, source);
-
     let config = term::Config::default();
 
     for error in errors {
         let diagnostic = match error {
-            LexError::UnexpectedChar(pos) => Diagnostic::error()
+            LexError::UnexpectedChar(pos, source_id) => Diagnostic::error()
                 .with_message("unexpected character")
                 .with_labels(vec![
-                    Label::primary(file_id, *pos..*pos + 1)
+                    Label::primary(*source_id, *pos..*pos + 1)
                         .with_message("this character is not valid here"),
                 ]),
-            LexError::UnterminatedString(pos) => Diagnostic::error()
+            LexError::UnterminatedString(pos, source_id) => Diagnostic::error()
                 .with_message("unterminated string literal")
                 .with_labels(vec![
-                    Label::primary(file_id, *pos..*pos + 1)
+                    Label::primary(*source_id, *pos..*pos + 1)
                         .with_message("string starts here but is never closed"),
                 ])
                 .with_notes(vec![
@@ -38,7 +34,7 @@ pub fn report_errors(
                 ]),
         };
 
-        term::emit_to_write_style(writer, &config, &files, &diagnostic)?;
+        term::emit_to_write_style(writer, &config, files, &diagnostic)?;
     }
 
     Ok(())
