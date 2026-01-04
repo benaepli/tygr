@@ -1,7 +1,8 @@
 use crate::analysis::dependencies::is_self_recursive;
 use crate::analysis::name_table::NameTable;
+use crate::analysis::prepared::{PreparedCrate, PreparedTypeDefinition};
 use crate::analysis::resolver::{
-    CrateId, GlobalName, GlobalType, Name, Resolved, ResolvedAnnotation, ResolvedAnnotationKind,
+    CrateId, GlobalName, GlobalType, Resolved, ResolvedAnnotation, ResolvedAnnotationKind,
     ResolvedDefinition, ResolvedKind, ResolvedMatchBranch, ResolvedPattern, ResolvedPatternKind,
     ResolvedStatement, ResolvedTypeAlias, ResolvedVariant, TypeName,
 };
@@ -96,8 +97,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                 write!(f, "{}[{}]", lhs_display, rhs_display)
             }
             TypeKind::AliasHead(gt, args) => {
-                let name = &gt.name;
-                write!(f, "{}", self.name_table.lookup_local_type_name(name))?;
+                write!(f, "{}", self.name_table.lookup_type_name(gt))?;
                 for arg in args {
                     let arg_display = TypeDisplay::new(arg.clone(), self.name_table);
                     write!(f, "[{}]", arg_display)?;
@@ -165,6 +165,14 @@ pub struct TypedMatchPattern {
 pub enum TypedGroup {
     NonRecursive(TypedDefinition),
     Recursive(Vec<TypedDefinition>),
+}
+
+/// A typed crate ready for code generation.
+#[derive(Debug, Clone)]
+pub struct TypedCrate {
+    pub crate_id: CrateId,
+    pub groups: Vec<TypedGroup>,
+    pub variants: Vec<VariantDef>,
 }
 
 #[derive(Debug, Clone)]
@@ -1795,5 +1803,42 @@ impl Inferrer {
             }
             _ => {}
         }
+    }
+
+    /// Infer types for an entire prepared crate.
+    ///
+    /// Takes an initial environment (e.g., containing exports from dependencies)
+    /// and returns the typed crate along with the final environment (containing
+    /// this crate's exported type schemes).
+    pub fn infer_crate(
+        &mut self,
+        prepared: PreparedCrate,
+        env: Environment,
+    ) -> Result<(TypedCrate, Environment), TypeError> {
+        // Process type definitions in dependency order
+        for type_group in prepared.type_groups {
+            for type_def in type_group {
+                match type_def {
+                    PreparedTypeDefinition::Alias(alias) => {
+                        self.register_alias(alias)?;
+                    }
+                    PreparedTypeDefinition::Variant(variant) => {
+                        self.register_variant(variant)?;
+                    }
+                }
+            }
+        }
+
+        // Infer value definitions in dependency order
+        let (groups, final_env) = self.infer_definitions(prepared.definition_groups, env)?;
+
+        Ok((
+            TypedCrate {
+                crate_id: prepared.crate_id,
+                groups,
+                variants: self.get_variant_definitions(),
+            },
+            final_env,
+        ))
     }
 }

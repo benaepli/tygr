@@ -1,4 +1,8 @@
-use crate::analysis::resolver::{GlobalName, Resolved, ResolvedDefinition, ResolvedKind};
+use crate::analysis::prepared::PreparedTypeDefinition;
+use crate::analysis::resolver::{
+    GlobalName, GlobalType, Resolved, ResolvedAnnotation, ResolvedAnnotationKind,
+    ResolvedDefinition, ResolvedKind,
+};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::DiGraph;
 use std::collections::{HashMap, HashSet};
@@ -127,4 +131,102 @@ fn get_dependencies(expr: &Resolved) -> HashSet<GlobalName> {
         | ResolvedKind::Builtin(_)
         | ResolvedKind::Constructor(_, _) => HashSet::new(),
     }
+}
+
+/// Recursively finds all type dependencies in a resolved annotation.
+fn get_type_dependencies(annot: &ResolvedAnnotation) -> HashSet<GlobalType> {
+    match &annot.kind {
+        ResolvedAnnotationKind::Var(gt) | ResolvedAnnotationKind::Alias(gt) => {
+            let mut set = HashSet::new();
+            set.insert(*gt);
+            set
+        }
+        ResolvedAnnotationKind::App(lhs, rhs)
+        | ResolvedAnnotationKind::Pair(lhs, rhs)
+        | ResolvedAnnotationKind::Lambda(lhs, rhs) => {
+            let mut set = get_type_dependencies(lhs);
+            set.extend(get_type_dependencies(rhs));
+            set
+        }
+        ResolvedAnnotationKind::Record(fields) => {
+            let mut set = HashSet::new();
+            for annot in fields.values() {
+                set.extend(get_type_dependencies(annot));
+            }
+            set
+        }
+    }
+}
+
+/// Get all type dependencies from a PreparedTypeDefinition.
+/// For aliases: dependencies in the body annotation.
+/// For variants: dependencies in constructor payload annotations.
+fn get_type_def_dependencies(def: &PreparedTypeDefinition) -> HashSet<GlobalType> {
+    match def {
+        PreparedTypeDefinition::Alias(alias) => {
+            let mut deps = get_type_dependencies(&alias.body);
+            // Remove type parameters (they're not external dependencies)
+            for param in &alias.type_params {
+                deps.remove(param);
+            }
+            deps
+        }
+        PreparedTypeDefinition::Variant(variant) => {
+            let mut deps = HashSet::new();
+            for ctor in variant.constructors.values() {
+                if let Some(annot) = &ctor.annotation {
+                    deps.extend(get_type_dependencies(annot));
+                }
+            }
+            // Remove type parameters
+            for param in &variant.type_params {
+                deps.remove(param);
+            }
+            deps
+        }
+    }
+}
+
+/// Orders type definitions (aliases + variants) by dependency using SCC analysis.
+/// Returns groups in dependency order (dependencies come before dependents).
+pub fn reorder_type_definitions(
+    defs: Vec<PreparedTypeDefinition>,
+) -> Vec<Vec<PreparedTypeDefinition>> {
+    let mut graph = DiGraph::<usize, ()>::new();
+    let mut name_to_node = HashMap::new();
+
+    // Create a node for every type definition
+    for (index, def) in defs.iter().enumerate() {
+        let node = graph.add_node(index);
+        name_to_node.insert(def.name(), node);
+    }
+
+    // Edge A -> B means A depends on B
+    for (_, def) in defs.iter().enumerate() {
+        let source_node = name_to_node[&def.name()];
+        let dependencies = get_type_def_dependencies(def);
+
+        for dep_name in dependencies {
+            if let Some(&target_node) = name_to_node.get(&dep_name) {
+                graph.add_edge(source_node, target_node, ());
+            }
+        }
+    }
+
+    let sccs = tarjan_scc(&graph);
+    let mut defs_opts: Vec<Option<PreparedTypeDefinition>> = defs.into_iter().map(Some).collect();
+
+    sccs.into_iter()
+        .map(|component| {
+            component
+                .into_iter()
+                .map(|node| {
+                    let index = *graph.node_weight(node).unwrap();
+                    defs_opts[index]
+                        .take()
+                        .expect("Type definition matched more than once")
+                })
+                .collect()
+        })
+        .collect()
 }

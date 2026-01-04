@@ -5,7 +5,7 @@ use crate::analysis::format::{
 };
 use crate::analysis::inference::{Environment, Inferrer, TypedGroup, TypedStatement};
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{Name, Resolver, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType, Name, Resolver, TypeName};
 use crate::ir::closure::{Converter, Program, VariantDef};
 use crate::lexer::Lexer;
 use crate::parser::{
@@ -118,7 +118,7 @@ pub fn compile_script(
         }
     }
 
-    let name_table = resolver.into_name_table();
+    let name_table = NameTable::with_global(resolver.into_local_name_table());
 
     let mut inferrer = Inferrer::new();
     for alias in resolved_aliases {
@@ -244,7 +244,7 @@ pub fn compile_typed_program(
 
     let next_name = resolver.next_name_id();
     let next_type_name = resolver.next_type_name_id();
-    let name_table = resolver.into_name_table();
+    let name_table = NameTable::with_global(resolver.into_local_name_table());
     let mut inferrer = Inferrer::new();
     for alias in resolved_aliases {
         match inferrer.register_alias(alias) {
@@ -288,7 +288,16 @@ pub fn compile_closure_program(
     writer: &mut impl WriteStyle,
 ) -> Result<(Program, NameTable), anyhow::Error> {
     let typed = compile_typed_program(input, name, writer)?;
-    let mut converter = Converter::new(typed.next_name, typed.next_type_name);
+    let mut converter = Converter::new(
+        GlobalName {
+            krate: None,
+            name: typed.next_name,
+        },
+        GlobalType {
+            krate: None,
+            name: typed.next_type_name,
+        },
+    );
     for var in typed.variants {
         converter.register_variant(var);
     }

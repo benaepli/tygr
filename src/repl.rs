@@ -1,7 +1,7 @@
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
-use crate::analysis::name_table::NameTable;
+use crate::analysis::name_table::{LocalNameTable, NameTable};
 use crate::analysis::resolver::{GlobalName, ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
@@ -72,8 +72,8 @@ impl Repl {
         self.mode
     }
 
-    pub fn snapshot_name_table(&self) -> NameTable {
-        self.resolver.snapshot_name_table()
+    pub fn snapshot_local_name_table(&self) -> LocalNameTable {
+        self.resolver.snapshot_local_name_table()
     }
 
     pub fn register_custom_fn(&mut self, func: impl CustomFn) -> Result<(), ReplError> {
@@ -256,7 +256,7 @@ impl Repl {
         decl: ReplStatement,
         writer: &mut impl WriteColor,
     ) {
-        let name_table = self.resolver.snapshot_name_table();
+        let name_table = NameTable::with_global(self.resolver.snapshot_local_name_table());
 
         match decl {
             ReplStatement::Type(t) => {
@@ -319,14 +319,14 @@ impl Repl {
         {
             Ok(s) => s,
             Err(e) => {
-                let nt = self.resolver.snapshot_name_table();
+                let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
                 let _ = report_type_errors(writer, files, &[e], &nt);
                 return;
             }
         };
 
         if self.mode == ReplMode::Ast {
-            let nt = self.resolver.snapshot_name_table();
+            let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
             let mut visualizer = TypedAstVisualizer::new(&nt);
             let ast_output = visualizer.visualize_statement(&typed);
             let _ = writer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)));
@@ -336,7 +336,7 @@ impl Repl {
 
         match eval_statement(&mut self.runtime_env, &typed, &self.custom_fns) {
             Ok(val) => {
-                let nt = self.resolver.snapshot_name_table();
+                let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
                 let _ = write!(writer, "  ");
                 let _ =
                     writer.set_color(ColorSpec::new().set_fg(Some(Color::Green)).set_bold(true));

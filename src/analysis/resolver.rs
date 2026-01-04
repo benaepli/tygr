@@ -1,7 +1,9 @@
 mod ast;
 pub use ast::*;
 
-use crate::analysis::name_table::NameTable;
+use crate::analysis::dependencies::{reorder_definitions, reorder_type_definitions};
+use crate::analysis::name_table::LocalNameTable;
+use crate::analysis::prepared::{PreparedCrate, PreparedTypeDefinition};
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
 use crate::driver::{Crate, ModuleId};
 use crate::parser::{
@@ -84,8 +86,8 @@ impl ResolveContext {
         id
     }
 
-    pub fn into_name_table(self) -> NameTable {
-        NameTable::with_maps(self.name_origins, self.type_name_origins)
+    pub fn into_local_name_table(self) -> LocalNameTable {
+        LocalNameTable::with_maps(self.name_origins, self.type_name_origins)
     }
 }
 
@@ -1603,18 +1605,18 @@ impl Resolver {
         }
     }
 
-    pub fn snapshot_name_table(&self) -> crate::analysis::name_table::NameTable {
-        crate::analysis::name_table::NameTable::with_maps(
+    pub fn snapshot_local_name_table(&self) -> crate::analysis::name_table::LocalNameTable {
+        crate::analysis::name_table::LocalNameTable::with_maps(
             self.global_ctx.name_origins.clone(),
             self.global_ctx.type_name_origins.clone(),
         )
     }
 
-    /// Extract the global NameTable from this resolver.
-    /// This consumes the resolver's name origin maps and returns them as a NameTable
+    /// Extract the LocalNameTable from this resolver.
+    /// This consumes the resolver's name origin maps and returns them as a LocalNameTable
     /// for use in error formatting and debugging.
-    pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
-        crate::analysis::name_table::NameTable::with_maps(
+    pub fn into_local_name_table(self) -> crate::analysis::name_table::LocalNameTable {
+        crate::analysis::name_table::LocalNameTable::with_maps(
             self.global_ctx.name_origins,
             self.global_ctx.type_name_origins,
         )
@@ -1626,5 +1628,39 @@ impl Resolver {
 
     pub fn next_type_name_id(&self) -> TypeName {
         self.global_ctx.next_type
+    }
+
+    /// Prepare a resolved crate for type inference by extracting and ordering definitions.
+    pub fn prepare_crate(&self, crate_id: CrateId) -> PreparedCrate {
+        let crate_def_map = &self.scope_ctx.world.crates[&crate_id];
+
+        // Extract type definitions (aliases + variants)
+        let mut type_defs = Vec::new();
+        for (_, type_def) in &crate_def_map.types {
+            match type_def {
+                ResolvedTypeDefinition::Alias(alias) => {
+                    type_defs.push(PreparedTypeDefinition::Alias(alias.clone()));
+                }
+                ResolvedTypeDefinition::Variant(variant) => {
+                    type_defs.push(PreparedTypeDefinition::Variant(variant.clone()));
+                }
+            }
+        }
+        let type_groups = reorder_type_definitions(type_defs);
+
+        // Extract value definitions (not constructors)
+        let mut value_defs = Vec::new();
+        for (_, value_def) in &crate_def_map.definitions {
+            if let ResolvedValueDefinition::Definition(def) = value_def {
+                value_defs.push(def.clone());
+            }
+        }
+        let definition_groups = reorder_definitions(value_defs);
+
+        PreparedCrate {
+            crate_id,
+            type_groups,
+            definition_groups,
+        }
     }
 }

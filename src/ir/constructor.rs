@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeID, TypeKind};
-use crate::analysis::resolver::{GlobalName, GlobalType, Name};
+use crate::analysis::resolver::{GlobalName, GlobalType};
 use crate::builtin::BuiltinFn;
 use crate::ir::closure::{
     Cluster as ClosureCluster, Definition as ClosureDef, Expr as ClosureExpr,
@@ -35,15 +35,15 @@ pub enum Definition {
 pub struct StructDef {
     pub name: GlobalType,
     pub type_params: Vec<TypeID>,
-    pub fields: Vec<(Name, Rc<Type>)>,
+    pub fields: Vec<(GlobalName, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: GlobalName,
     pub type_params: Vec<TypeID>,
-    pub param: Name,
-    pub env_param: Name,
+    pub param: GlobalName,
+    pub env_param: GlobalName,
     pub env_struct: GlobalType,
     pub body: Expr,
     pub ret_ty: Rc<Type>,
@@ -82,7 +82,7 @@ pub struct Pattern {
 
 #[derive(Debug, Clone)]
 pub enum PatternKind {
-    Var(Name),
+    Var(GlobalName),
     Unit,
     Pair(Box<Pattern>, Box<Pattern>),
     Wildcard,
@@ -97,15 +97,15 @@ pub enum PatternKind {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    Local(Name),
+    Local(GlobalName),
     Global(GlobalName),
     EnvAccess {
-        field: Name,
+        field: GlobalName,
     },
     MakeClosure {
         fn_ref: GlobalName,
         env_struct: GlobalType,
-        captures: Vec<(Name, Expr)>,
+        captures: Vec<(GlobalName, Expr)>,
     },
     CallClosure {
         closure: Box<Expr>,
@@ -164,11 +164,11 @@ pub struct Converter {
 
     // Mapping from constructor name to the name of the generated helper function
     ctor_helpers: HashMap<(GlobalType, GlobalName), GlobalName>,
-    name_counter: Name,
+    name_counter: GlobalName,
 }
 
 impl Converter {
-    pub fn new(base_name: Name) -> Self {
+    pub fn new(base_name: GlobalName) -> Self {
         Self {
             tag_map: TagMap::new(),
             generated_funcs: Vec::new(),
@@ -177,9 +177,9 @@ impl Converter {
         }
     }
 
-    fn next_name(&mut self) -> Name {
+    fn next_name(&mut self) -> GlobalName {
         let n = self.name_counter;
-        self.name_counter.0 += 1;
+        self.name_counter.name.0 += 1;
         n
     }
 
@@ -191,10 +191,7 @@ impl Converter {
                 self.tag_map.insert(variant.name, ctor.name, tag);
 
                 if let Some(payload_ty) = &ctor.payload {
-                    let helper_name = GlobalName {
-                        krate: None,
-                        name: self.next_name(),
-                    };
+                    let helper_name = self.next_name();
                     self.ctor_helpers
                         .insert((variant.name, ctor.name), helper_name);
 

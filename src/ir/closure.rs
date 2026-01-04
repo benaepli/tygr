@@ -1,7 +1,7 @@
 use crate::analysis::inference::{
     Type, TypeID, TypeKind, Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind,
 };
-use crate::analysis::resolver::{GlobalName, GlobalType, Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType};
 use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -11,7 +11,7 @@ use std::rc::Rc;
 pub struct Program {
     pub clusters: Vec<Cluster>,
     pub variants: Vec<VariantDef>,
-    pub next_name: Name,
+    pub next_name: GlobalName,
 }
 
 #[derive(Debug, Clone)]
@@ -44,15 +44,15 @@ pub enum Definition {
 pub struct StructDef {
     pub name: GlobalType,
     pub type_params: Vec<TypeID>,
-    pub fields: Vec<(Name, Rc<Type>)>,
+    pub fields: Vec<(GlobalName, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
     pub name: GlobalName,
     pub type_params: Vec<TypeID>,
-    pub param: Name,
-    pub env_param: Name,
+    pub param: GlobalName,
+    pub env_param: GlobalName,
     pub env_struct: GlobalType,
     pub body: Expr,
     pub ret_ty: Rc<Type>,
@@ -91,7 +91,7 @@ pub struct Pattern {
 
 #[derive(Debug, Clone)]
 pub enum PatternKind {
-    Var(Name),
+    Var(GlobalName),
     Unit,
     Pair(Box<Pattern>, Box<Pattern>),
     Wildcard,
@@ -103,15 +103,15 @@ pub enum PatternKind {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    Local(Name),
+    Local(GlobalName),
     Global(GlobalName),
     EnvAccess {
-        field: Name,
+        field: GlobalName,
     },
     MakeClosure {
         fn_ref: GlobalName,
         env_struct: GlobalType,
-        captures: Vec<(Name, Expr)>,
+        captures: Vec<(GlobalName, Expr)>,
     },
     CallClosure {
         closure: Box<Expr>,
@@ -176,7 +176,7 @@ fn collect_free_type_vars(ty: &Type, set: &mut BTreeSet<TypeID>) {
 }
 
 fn compute_closure_type_params(
-    captures: &[(Name, Rc<Type>)],
+    captures: &[(GlobalName, Rc<Type>)],
     param_ty: &Type,
     ret_ty: &Type,
 ) -> Vec<TypeID> {
@@ -191,20 +191,20 @@ fn compute_closure_type_params(
 
 #[derive(Debug, Clone)]
 enum VarSource {
-    Local(Name, Rc<Type>),
-    Env { field: Name, ty: Rc<Type> },
+    Local(GlobalName, Rc<Type>),
+    Env { field: GlobalName, ty: Rc<Type> },
 }
 
 pub struct Converter {
     definitions: Vec<Definition>,
-    counter: Name,
-    type_counter: TypeName,
+    counter: GlobalName,
+    type_counter: GlobalType,
     globals: HashMap<GlobalName, Rc<Type>>,
     variants: BTreeMap<GlobalType, VariantDef>,
 }
 
 impl Converter {
-    pub fn new(base: Name, base_type: TypeName) -> Self {
+    pub fn new(base: GlobalName, base_type: GlobalType) -> Self {
         Self {
             definitions: Vec::new(),
             counter: base,
@@ -214,15 +214,15 @@ impl Converter {
         }
     }
 
-    fn next_name(&mut self) -> Name {
+    fn next_name(&mut self) -> GlobalName {
         let n = self.counter;
-        self.counter.0 += 1;
+        self.counter.name.0 += 1;
         n
     }
 
-    fn next_type(&mut self) -> TypeName {
+    fn next_type(&mut self) -> GlobalType {
         let n = self.type_counter;
-        self.type_counter.0 += 1;
+        self.type_counter.name.0 += 1;
         n
     }
 
@@ -283,9 +283,7 @@ impl Converter {
     fn convert_pattern(&self, pat: TypedPattern) -> Pattern {
         let ty = pat.ty.clone();
         let kind = match pat.kind {
-            TypedPatternKind::Var {
-                name: GlobalName { name, .. },
-            } => PatternKind::Var(name),
+            TypedPatternKind::Var { name } => PatternKind::Var(name),
             TypedPatternKind::Wildcard => PatternKind::Wildcard,
             TypedPatternKind::Unit => PatternKind::Unit,
             TypedPatternKind::Pair(p1, p2) => PatternKind::Pair(
@@ -314,12 +312,10 @@ impl Converter {
     fn populate_scope_from_pattern_locals(
         &self,
         pat: &TypedPattern,
-        scope: &mut HashMap<Name, VarSource>,
+        scope: &mut HashMap<GlobalName, VarSource>,
     ) {
         match &pat.kind {
-            TypedPatternKind::Var {
-                name: GlobalName { name, .. },
-            } => {
+            TypedPatternKind::Var { name } => {
                 scope.insert(*name, VarSource::Local(*name, pat.ty.clone()));
             }
             TypedPatternKind::Pair(p1, p2) | TypedPatternKind::Cons(p1, p2) => {
@@ -340,7 +336,7 @@ impl Converter {
         }
     }
 
-    fn convert_expr(&mut self, expr: Typed, scope: &HashMap<Name, VarSource>) -> Expr {
+    fn convert_expr(&mut self, expr: Typed, scope: &HashMap<GlobalName, VarSource>) -> Expr {
         let ty = expr.ty.clone();
         match expr.kind {
             TypedKind::IntLit(i) => Expr {
@@ -368,8 +364,7 @@ impl Converter {
                 ty,
             },
             TypedKind::Var(global_name) => {
-                let GlobalName { name, .. } = global_name;
-                let kind = match scope.get(&name) {
+                let kind = match scope.get(&global_name) {
                     Some(VarSource::Local(n, _)) => ExprKind::Local(*n),
                     Some(VarSource::Env { field, .. }) => ExprKind::EnvAccess { field: *field },
                     None => {
@@ -395,7 +390,7 @@ impl Converter {
                 let mut inner_scope = HashMap::new();
 
                 for cap_global_name in sorted_captures {
-                    let GlobalName { name, .. } = cap_global_name;
+                    let name = cap_global_name;
                     if self.globals.contains_key(&cap_global_name) {
                         continue;
                     }
@@ -426,14 +421,8 @@ impl Converter {
                     );
                 }
 
-                let fn_name = GlobalName {
-                    krate: None,
-                    name: self.next_name(),
-                };
-                let env_struct_name = GlobalType {
-                    krate: None,
-                    name: self.next_type(),
-                };
+                let fn_name = self.next_name();
+                let env_struct_name = self.next_type();
                 let env_param_name = self.next_name();
                 let arg_param_name = self.next_name();
 

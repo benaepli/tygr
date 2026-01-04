@@ -90,7 +90,7 @@ impl<'a> ClosureIrVisualizer<'a> {
         self.write_line(&format!("Struct '{}'{}", name, type_params));
         self.indent += 1;
         for (field_name, field_ty) in &def.fields {
-            let field_name_str = self.name_table.lookup_local_name(field_name);
+            let field_name_str = self.name_table.lookup_name(field_name);
             let ty_str = self.type_str(field_ty);
             self.write_line(&format!("{} : {}", field_name_str, ty_str));
         }
@@ -100,8 +100,8 @@ impl<'a> ClosureIrVisualizer<'a> {
     fn visit_func_def(&mut self, def: &FuncDef) {
         let name = self.name_table.lookup_name(&def.name);
         let type_params = self.type_params_str(&def.type_params);
-        let param = self.name_table.lookup_local_name(&def.param);
-        let env_param = self.name_table.lookup_local_name(&def.env_param);
+        let param = self.name_table.lookup_name(&def.param);
+        let env_param = self.name_table.lookup_name(&def.env_param);
         let env_struct = self.name_table.lookup_type_name(&def.env_struct);
         let ret_ty = self.type_str(&def.ret_ty);
         self.write_line(&format!(
@@ -129,7 +129,7 @@ impl<'a> ClosureIrVisualizer<'a> {
         let ty_str = self.type_str(&pat.ty);
         match &pat.kind {
             PatternKind::Var(name) => {
-                let name_str = self.name_table.lookup_local_name(name);
+                let name_str = self.name_table.lookup_name(name);
                 self.write_line(&format!("Var({}) : {}", name_str, ty_str));
             }
             PatternKind::Unit => {
@@ -206,7 +206,7 @@ impl<'a> ClosureIrVisualizer<'a> {
         let ty_str = self.type_str(&expr.ty);
         match &expr.kind {
             ExprKind::Local(name) => {
-                let name_str = self.name_table.lookup_local_name(name);
+                let name_str = self.name_table.lookup_name(name);
                 self.write_line(&format!("Local({}) : {}", name_str, ty_str));
             }
             ExprKind::Global(name) => {
@@ -214,7 +214,7 @@ impl<'a> ClosureIrVisualizer<'a> {
                 self.write_line(&format!("Global({}) : {}", name_str, ty_str));
             }
             ExprKind::EnvAccess { field } => {
-                let field_str = self.name_table.lookup_local_name(field);
+                let field_str = self.name_table.lookup_name(field);
                 self.write_line(&format!("EnvAccess({}) : {}", field_str, ty_str));
             }
             ExprKind::MakeClosure {
@@ -233,7 +233,7 @@ impl<'a> ClosureIrVisualizer<'a> {
                     self.write_line("captures:");
                     self.indent += 1;
                     for (cap_name, cap_expr) in captures {
-                        let cap_name_str = self.name_table.lookup_local_name(cap_name);
+                        let cap_name_str = self.name_table.lookup_name(cap_name);
                         self.write_line(&format!("{}:", cap_name_str));
                         self.indent += 1;
                         self.visit_expr(cap_expr);

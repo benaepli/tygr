@@ -3,6 +3,7 @@ pub mod format;
 pub mod inference;
 pub mod main_function;
 pub mod name_table;
+pub mod prepared;
 pub mod resolver;
 
 use crate::parser::{Definition, Expr, ExprKind, Path, Pattern, PatternKind, Span};
