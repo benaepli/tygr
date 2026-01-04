@@ -1,6 +1,6 @@
 pub mod format;
 
-use crate::parser::Span;
+use crate::parser::{SourceId, Span};
 use phf_macros::phf_map;
 use std::fmt;
 use std::iter::Peekable;
@@ -97,6 +97,12 @@ pub enum TokenKind {
     Type,
     Enum,
     Def,
+    Pub,
+    Use,
+    Mod,
+    Crate,
+    Super,
+    As,
 }
 
 impl fmt::Display for TokenKind {
@@ -166,6 +172,12 @@ impl fmt::Display for TokenKind {
             TokenKind::Type => write!(f, "type"),
             TokenKind::Enum => write!(f, "enum"),
             TokenKind::Def => write!(f, "def"),
+            TokenKind::Pub => write!(f, "pub"),
+            TokenKind::Use => write!(f, "use"),
+            TokenKind::Mod => write!(f, "mod"),
+            TokenKind::Crate => write!(f, "crate"),
+            TokenKind::Super => write!(f, "super"),
+            TokenKind::As => write!(f, "as"),
         }
     }
 }
@@ -185,6 +197,12 @@ static KEYWORDS: phf::Map<&'static str, TokenKind> = phf_map! {
     "type" => TokenKind::Type,
     "enum" => TokenKind::Enum,
     "def" => TokenKind::Def,
+    "pub" => TokenKind::Pub,
+    "use" => TokenKind::Use,
+    "mod" => TokenKind::Mod,
+    "crate" => TokenKind::Crate,
+    "super" => TokenKind::Super,
+    "as" => TokenKind::As,
 };
 
 fn is_special_char(ch: char) -> bool {
@@ -219,23 +237,25 @@ fn is_special_char(ch: char) -> bool {
 #[derive(Error, Debug, PartialEq, Clone)]
 pub enum LexError {
     #[error("unexpected character")]
-    UnexpectedChar(usize),
+    UnexpectedChar(usize, SourceId),
     #[error("unterminated string")]
-    UnterminatedString(usize),
+    UnterminatedString(usize, SourceId),
 }
 
 /// A lexical analyzer that converts source code into a stream of tokens.
 pub struct Lexer<'a> {
     input: Peekable<Chars<'a>>,
     position: usize,
+    source: SourceId,
 }
 
 impl<'a> Lexer<'a> {
     /// Creates a new lexer for the given input string.
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str, source: SourceId) -> Self {
         Self {
             input: input.chars().peekable(),
             position: 0,
+            source,
         }
     }
 
@@ -303,7 +323,7 @@ impl<'a> Lexer<'a> {
             let ch = self
                 .input
                 .next()
-                .ok_or(LexError::UnterminatedString(start))?;
+                .ok_or(LexError::UnterminatedString(start, self.source))?;
             self.position += 1;
             match ch {
                 '"' => return Ok(TokenKind::String(value)),
@@ -319,7 +339,7 @@ impl<'a> Lexer<'a> {
                             value.push(ch);
                         }
                         None => {
-                            return Err(LexError::UnterminatedString(start));
+                            return Err(LexError::UnterminatedString(start, self.source));
                         }
                     }
                 }
@@ -355,12 +375,12 @@ impl<'a> Lexer<'a> {
             num_str
                 .parse()
                 .map(TokenKind::Float)
-                .map_err(|_| LexError::UnexpectedChar(start))
+                .map_err(|_| LexError::UnexpectedChar(start, self.source))
         } else {
             num_str
                 .parse()
                 .map(TokenKind::Integer)
-                .map_err(|_| LexError::UnexpectedChar(start))
+                .map_err(|_| LexError::UnexpectedChar(start, self.source))
         }
     }
 
@@ -482,7 +502,7 @@ impl<'a> Iterator for Lexer<'a> {
                 if self.match_next('&') {
                     Ok(TokenKind::And)
                 } else {
-                    Err(LexError::UnexpectedChar(start))
+                    Err(LexError::UnexpectedChar(start, self.source))
                 }
             }
 
@@ -498,7 +518,7 @@ impl<'a> Iterator for Lexer<'a> {
             Token::new(
                 kind,
                 Span {
-                    context: (),
+                    context: self.source,
                     start,
                     end,
                 },

@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeID, TypeKind};
-use crate::analysis::resolver::{Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType};
 use crate::builtin::BuiltinFn;
 use crate::ir::closure::{
     Cluster as ClosureCluster, Definition as ClosureDef, Expr as ClosureExpr,
@@ -33,25 +33,25 @@ pub enum Definition {
 
 #[derive(Debug, Clone)]
 pub struct StructDef {
-    pub name: TypeName,
+    pub name: GlobalType,
     pub type_params: Vec<TypeID>,
-    pub fields: Vec<(Name, Rc<Type>)>,
+    pub fields: Vec<(GlobalName, Rc<Type>)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FuncDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub type_params: Vec<TypeID>,
-    pub param: Name,
-    pub env_param: Name,
-    pub env_struct: TypeName,
+    pub param: GlobalName,
+    pub env_param: GlobalName,
+    pub env_struct: GlobalType,
     pub body: Expr,
     pub ret_ty: Rc<Type>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalDef {
-    pub name: Name,
+    pub name: GlobalName,
     pub ty: Rc<Type>,
     pub val: Expr,
 }
@@ -82,7 +82,7 @@ pub struct Pattern {
 
 #[derive(Debug, Clone)]
 pub enum PatternKind {
-    Var(Name),
+    Var(GlobalName),
     Unit,
     Pair(Box<Pattern>, Box<Pattern>),
     Wildcard,
@@ -97,15 +97,15 @@ pub enum PatternKind {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    Local(Name),
-    Global(Name),
+    Local(GlobalName),
+    Global(GlobalName),
     EnvAccess {
-        field: Name,
+        field: GlobalName,
     },
     MakeClosure {
-        fn_ref: Name,
-        env_struct: TypeName,
-        captures: Vec<(Name, Expr)>,
+        fn_ref: GlobalName,
+        env_struct: GlobalType,
+        captures: Vec<(GlobalName, Expr)>,
     },
     CallClosure {
         closure: Box<Expr>,
@@ -125,7 +125,7 @@ pub enum ExprKind {
     RecordLit(BTreeMap<String, Expr>),
     Cons(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
-    RecRecord(BTreeMap<String, (Name, Expr)>),
+    RecRecord(BTreeMap<String, (GlobalName, Expr)>),
     FieldAccess(Box<Expr>, String),
     Builtin(BuiltinFn),
 
@@ -136,7 +136,7 @@ pub enum ExprKind {
 }
 
 struct TagMap {
-    mapping: BTreeMap<(TypeName, Name), u32>,
+    mapping: BTreeMap<(GlobalType, GlobalName), u32>,
 }
 
 impl TagMap {
@@ -146,11 +146,11 @@ impl TagMap {
         }
     }
 
-    fn insert(&mut self, type_name: TypeName, ctor_name: Name, tag: u32) {
+    fn insert(&mut self, type_name: GlobalType, ctor_name: GlobalName, tag: u32) {
         self.mapping.insert((type_name, ctor_name), tag);
     }
 
-    fn get(&self, type_name: TypeName, ctor_name: Name) -> u32 {
+    fn get(&self, type_name: GlobalType, ctor_name: GlobalName) -> u32 {
         *self
             .mapping
             .get(&(type_name, ctor_name))
@@ -163,12 +163,12 @@ pub struct Converter {
     generated_funcs: Vec<FuncDef>,
 
     // Mapping from constructor name to the name of the generated helper function
-    ctor_helpers: HashMap<(TypeName, Name), Name>,
-    name_counter: Name,
+    ctor_helpers: HashMap<(GlobalType, GlobalName), GlobalName>,
+    name_counter: GlobalName,
 }
 
 impl Converter {
-    pub fn new(base_name: Name) -> Self {
+    pub fn new(base_name: GlobalName) -> Self {
         Self {
             tag_map: TagMap::new(),
             generated_funcs: Vec::new(),
@@ -177,9 +177,9 @@ impl Converter {
         }
     }
 
-    fn next_name(&mut self) -> Name {
+    fn next_name(&mut self) -> GlobalName {
         let n = self.name_counter;
-        self.name_counter.0 += 1;
+        self.name_counter.name.0 += 1;
         n
     }
 

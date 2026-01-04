@@ -1,0 +1,6 @@
+[project]
+name = "mybin"
+type = "binary"
+
+[dependencies]
+mylib = "../mylib"

@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeKind, TypeScheme};
-use crate::analysis::resolver::TypeName;
+use crate::analysis::resolver::{GlobalName, GlobalType, TypeName};
 use phf::Map;
 use phf_macros::phf_map;
 use std::rc::Rc;
@@ -122,7 +122,12 @@ pub static BUILTIN_TYPES: Map<&'static str, TypeName> = phf_map! {
     "list" => LIST_TYPE,
 };
 
-pub fn builtin_kinds(name: TypeName) -> Option<Rc<Kind>> {
+pub fn builtin_kinds(gt: GlobalType) -> Option<Rc<Kind>> {
+    if gt.krate.is_some() {
+        return None;
+    }
+
+    let name = gt.name;
     if name == INT_TYPE
         || name == FLOAT_TYPE
         || name == BOOL_TYPE

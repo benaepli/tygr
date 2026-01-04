@@ -1,12 +1,13 @@
 use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
-use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{ResolutionError, Resolver};
+use crate::analysis::name_table::{LocalNameTable, NameTable};
+use crate::analysis::resolver::{GlobalName, ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
-use crate::parser::{ReplStatement, make_input};
+use crate::parser::{ReplStatement, SourceId, Span, make_input};
+use crate::sources::FileSources;
 use crate::visualize::typed::TypedAstVisualizer;
 use crate::{interpreter, lexer, parser};
 use chumsky::Parser;
@@ -71,8 +72,8 @@ impl Repl {
         self.mode
     }
 
-    pub fn snapshot_name_table(&self) -> NameTable {
-        self.resolver.snapshot_name_table()
+    pub fn snapshot_local_name_table(&self) -> LocalNameTable {
+        self.resolver.snapshot_local_name_table()
     }
 
     pub fn register_custom_fn(&mut self, func: impl CustomFn) -> Result<(), ReplError> {
@@ -80,18 +81,36 @@ impl Repl {
         let scheme = func.type_scheme();
         let func = Rc::new(func);
 
-        let name_id = self.resolver.register_custom(&name_str).map_err(|source| {
-            ReplError::CustomFunctionRegistration {
+        let name_id = self
+            .resolver
+            .register_global_custom(&name_str)
+            .map_err(|source| ReplError::CustomFunctionRegistration {
                 name: name_str.clone(),
                 source,
-            }
-        })?;
+            })?;
 
-        self.inferrer.register_custom_type(name_id, scheme.clone());
-        self.type_env.insert(name_id, scheme);
+        self.inferrer.register_custom_type(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            scheme.clone(),
+        );
+        self.type_env.insert(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            scheme,
+        );
         let custom_id = self.custom_fns.register(name_id, func);
-        self.runtime_env
-            .insert(name_id, Rc::new(Value::Custom(custom_id)));
+        self.runtime_env.insert(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            Rc::new(Value::Custom(custom_id)),
+        );
 
         Ok(())
     }
@@ -205,73 +224,91 @@ impl Repl {
 
     pub fn process_line(&mut self, source: &str, writer: &mut impl WriteColor) {
         let name = "<repl>";
+        let files = FileSources::single(name, source);
 
-        let mut lexer = Lexer::new(source);
+        let mut lexer = Lexer::new(source, SourceId::SYNTHETIC);
         let (tokens, lex_errors) = lexer.collect_all();
         if !lex_errors.is_empty() {
-            let _ = lexer::format::report_errors(writer, source, &lex_errors, name);
+            let _ = lexer::format::report_errors(writer, &files, &lex_errors);
             return;
         }
 
-        let input = make_input((0..source.len()).into(), &tokens);
+        let input = make_input(
+            Span {
+                context: SourceId::SYNTHETIC,
+                start: 0,
+                end: source.len(),
+            },
+            &tokens,
+        );
         let Ok(decl) = parser::repl().parse(input).into_result().map_err(|e| {
-            let _ = parser::format::report_errors(writer, source, e.iter(), name);
+            let _ = parser::format::report_errors(writer, &files, e.iter());
         }) else {
             return;
         };
 
-        self.execute_declaration(source, name, decl, writer);
+        self.execute_declaration(&files, decl, writer);
     }
 
     fn execute_declaration(
         &mut self,
-        source: &str,
-        name: &str,
+        files: &FileSources,
         decl: ReplStatement,
         writer: &mut impl WriteColor,
     ) {
-        let name_table = self.resolver.snapshot_name_table();
+        let name_table = NameTable::with_global(self.resolver.snapshot_local_name_table());
 
         match decl {
             ReplStatement::Type(t) => {
-                if let Err(e) = self.resolver.resolve_type_alias(t) {
-                    let _ = report_resolution_errors(writer, source, &[e], name);
+                let res = self
+                    .resolver
+                    .declare_global_type_alias(&t)
+                    .and_then(|_| self.resolver.define_global_type_alias(t));
+
+                match res {
+                    Err(e) => {
+                        let _ = report_resolution_errors(writer, files, &[e]);
+                    }
+                    Ok(resolved) => {
+                        if let Err(e) = self.inferrer.register_alias(resolved) {
+                            let _ = report_type_errors(writer, files, &[e], &name_table);
+                        }
+                    }
                 }
             }
 
             ReplStatement::Variant(v) => {
                 let res = self
                     .resolver
-                    .declare_variant(&v)
-                    .and_then(|_| self.resolver.define_variant(v));
+                    .declare_global_variant(&v)
+                    .and_then(|_| self.resolver.define_global_variant(v));
 
                 match res {
                     Err(e) => {
-                        let _ = report_resolution_errors(writer, source, &[e], name);
+                        let _ = report_resolution_errors(writer, files, &[e]);
                     }
                     Ok(resolved) => {
                         if let Err(e) = self.inferrer.register_variant(resolved) {
-                            let _ = report_type_errors(writer, source, &[e], name, &name_table);
+                            let _ = report_type_errors(writer, files, &[e], &name_table);
                         }
                     }
                 }
             }
 
-            ReplStatement::Statement(stmt) => self.execute_statement(source, name, stmt, writer),
+            ReplStatement::Statement(stmt) => self.execute_statement(files, stmt, writer),
         }
     }
 
     fn execute_statement(
         &mut self,
-        source: &str,
-        name: &str,
+        files: &FileSources,
         stmt: parser::Statement,
         writer: &mut impl WriteColor,
     ) {
         let resolved = match self.resolver.resolve_global_statement(stmt) {
             Ok(s) => s,
             Err(e) => {
-                let _ = report_resolution_errors(writer, source, &[e], name);
+                let _ = report_resolution_errors(writer, files, &[e]);
                 return;
             }
         };
@@ -282,14 +319,14 @@ impl Repl {
         {
             Ok(s) => s,
             Err(e) => {
-                let nt = self.resolver.snapshot_name_table();
-                let _ = report_type_errors(writer, source, &[e], name, &nt);
+                let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
+                let _ = report_type_errors(writer, files, &[e], &nt);
                 return;
             }
         };
 
         if self.mode == ReplMode::Ast {
-            let nt = self.resolver.snapshot_name_table();
+            let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
             let mut visualizer = TypedAstVisualizer::new(&nt);
             let ast_output = visualizer.visualize_statement(&typed);
             let _ = writer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)));
@@ -299,7 +336,7 @@ impl Repl {
 
         match eval_statement(&mut self.runtime_env, &typed, &self.custom_fns) {
             Ok(val) => {
-                let nt = self.resolver.snapshot_name_table();
+                let nt = NameTable::with_global(self.resolver.snapshot_local_name_table());
                 let _ = write!(writer, "  ");
                 let _ =
                     writer.set_color(ColorSpec::new().set_fg(Some(Color::Green)).set_bold(true));

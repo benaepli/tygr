@@ -2,10 +2,11 @@ use crate::analysis::inference::{
     Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind, TypedStatement,
 };
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType, Name, TypeName};
 use crate::builtin::BuiltinFn;
 use crate::custom::{CustomFnId, CustomFnRegistry};
 use crate::parser::BinOp;
+use js_sys::WebAssembly::Global;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -40,9 +41,9 @@ pub enum Value {
     Builtin(BuiltinFn),
     Record(HashMap<String, Value>),
     #[serde(skip)]
-    Constructor(TypeName, Name),
+    Constructor(GlobalType, GlobalName),
     #[serde(skip)]
-    Variant(Rc<Value>, TypeName, Name),
+    Variant(Rc<Value>, GlobalType, GlobalName),
     /// A custom function implemented via the CustomFn trait.
     #[serde(skip)]
     Custom(CustomFnId),
@@ -78,7 +79,9 @@ impl fmt::Debug for Value {
                 }
                 debug_map.finish()
             }
-            Value::Constructor(_def_id, name) => write!(f, "<constructor:{}>", name),
+            Value::Constructor(_def_id, name) => {
+                write!(f, "<constructor:{:?}\\{}>", name.krate, name.name)
+            }
             Value::Variant(val, _def_id, name) => f
                 .debug_tuple(&format!("Variant::{}", name))
                 .field(val)
@@ -168,7 +171,7 @@ impl<'a> fmt::Display for ValueDisplay<'a> {
 /// Represents an error that can occur during evaluation.
 #[derive(Debug, Clone)]
 pub enum EvalError {
-    UndefinedVariable(Name),
+    UndefinedVariable(GlobalName),
     PatternMismatch(String),
     TypeMismatch(String),
     NotAFunction,
@@ -196,7 +199,7 @@ pub type EvalResult = Result<Rc<Value>, EvalError>;
 /// The execution environment, mapping names to values.
 #[derive(Clone)]
 pub struct Environment {
-    bindings: HashMap<Name, Rc<RefCell<Rc<Value>>>>,
+    bindings: HashMap<GlobalName, Rc<RefCell<Rc<Value>>>>,
     pub output: Rc<RefCell<dyn Write>>,
 }
 
@@ -229,15 +232,15 @@ impl Environment {
         }
     }
 
-    pub fn get(&self, name: &Name) -> Option<Rc<Value>> {
+    pub fn get(&self, name: &GlobalName) -> Option<Rc<Value>> {
         self.bindings.get(name).map(|cell| cell.borrow().clone())
     }
 
-    pub fn insert_cell(&mut self, name: Name, cell: Rc<RefCell<Rc<Value>>>) {
+    pub fn insert_cell(&mut self, name: GlobalName, cell: Rc<RefCell<Rc<Value>>>) {
         self.bindings.insert(name, cell);
     }
 
-    pub fn insert(&mut self, name: Name, value: Rc<Value>) {
+    pub fn insert(&mut self, name: GlobalName, value: Rc<Value>) {
         self.bindings.insert(name, Rc::new(RefCell::new(value)));
     }
 }
@@ -841,7 +844,7 @@ pub fn eval_groups(
 
 pub fn run_main(
     env: &mut Environment,
-    main_name: Name,
+    main_name: GlobalName,
     custom_fns: &CustomFnRegistry,
 ) -> EvalResult {
     let main_val = env

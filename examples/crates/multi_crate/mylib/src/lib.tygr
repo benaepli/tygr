@@ -1,0 +1,2 @@
+pub def greet name: string = 
+    "Hello, " ^ name ^ "!"
