@@ -191,7 +191,10 @@ impl Converter {
                 self.tag_map.insert(variant.name, ctor.name, tag);
 
                 if let Some(payload_ty) = &ctor.payload {
-                    let helper_name = (None, self.next_name());
+                    let helper_name = GlobalName {
+                        krate: None,
+                        name: self.next_name(),
+                    };
                     self.ctor_helpers
                         .insert((variant.name, ctor.name), helper_name);
 

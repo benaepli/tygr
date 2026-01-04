@@ -43,18 +43,16 @@ impl NameTable {
     /// Look up the original name for a GlobalName (crate-aware Name).
     /// Returns a fallback string if not found.
     pub fn lookup_name(&self, global_name: &GlobalName) -> String {
-        let (_crate_id, name) = global_name;
         // For now, ignore crate_id and delegate to local lookup
         // Future: could prefix with crate name if crate_id is Some
-        self.lookup_local_name(name)
+        self.lookup_local_name(&global_name.name)
     }
 
     /// Look up the original name for a GlobalType (crate-aware TypeName).
     /// Returns a fallback string if not found.
     pub fn lookup_type_name(&self, global_type: &GlobalType) -> String {
-        let (_crate_id, type_name) = global_type;
         // For now, ignore crate_id and delegate to local lookup
         // Future: could prefix with crate name if crate_id is Some
-        self.lookup_local_type_name(type_name)
+        self.lookup_local_type_name(&global_type.name)
     }
 }

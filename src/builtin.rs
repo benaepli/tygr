@@ -122,11 +122,12 @@ pub static BUILTIN_TYPES: Map<&'static str, TypeName> = phf_map! {
     "list" => LIST_TYPE,
 };
 
-pub fn builtin_kinds((krate, name): GlobalType) -> Option<Rc<Kind>> {
-    if krate == None {
+pub fn builtin_kinds(gt: GlobalType) -> Option<Rc<Kind>> {
+    if gt.krate.is_some() {
         return None;
     }
 
+    let name = gt.name;
     if name == INT_TYPE
         || name == FLOAT_TYPE
         || name == BOOL_TYPE

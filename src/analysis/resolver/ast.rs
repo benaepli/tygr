@@ -60,8 +60,41 @@ pub enum ResolvedValueDefinition {
     Definition(ResolvedDefinition),
 }
 
-pub type GlobalType = (Option<CrateId>, TypeName);
-pub type GlobalName = (Option<CrateId>, Name);
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct GlobalType {
+    pub krate: Option<CrateId>,
+    pub name: TypeName,
+}
+
+impl fmt::Display for GlobalType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(krate) = self.krate {
+            write!(f, "{:?}:{}", krate, self.name)
+        } else {
+            write!(f, "{}", self.name)
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct GlobalName {
+    pub krate: Option<CrateId>,
+    pub name: Name,
+}
+
+impl fmt::Display for GlobalName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(krate) = self.krate {
+            write!(f, "{:?}:{}", krate, self.name)
+        } else {
+            write!(f, "{}", self.name)
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedPatternKind {

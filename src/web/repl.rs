@@ -1,4 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeKind, TypeScheme};
+use crate::analysis::resolver::GlobalType;
 use crate::builtin::{BOOL_TYPE, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE};
 use crate::custom::CustomFn;
 use crate::interpreter::{Environment, EvalError, EvalResult, Value};
@@ -115,7 +116,10 @@ fn parse_simple_type(s: &str) -> Result<Rc<Type>, JsError> {
             let inner = &s[1..s.len() - 1];
             let inner_ty = parse_simple_type(inner)?;
             let list_con = Type::new(
-                TypeKind::Con((None, LIST_TYPE)),
+                TypeKind::Con(GlobalType {
+                    krate: None,
+                    name: LIST_TYPE,
+                }),
                 Rc::new(Kind::Arrow(Rc::new(Kind::Star), Rc::new(Kind::Star))),
             );
             Ok(Type::new(

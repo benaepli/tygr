@@ -80,7 +80,7 @@ impl fmt::Debug for Value {
                 debug_map.finish()
             }
             Value::Constructor(_def_id, name) => {
-                write!(f, "<constructor:{:?}\\{}>", name.0, name.1)
+                write!(f, "<constructor:{:?}\\{}>", name.krate, name.name)
             }
             Value::Variant(val, _def_id, name) => f
                 .debug_tuple(&format!("Variant::{}", name))

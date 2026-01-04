@@ -2,7 +2,7 @@ use crate::analysis::format::{report_resolution_errors, report_type_errors};
 use crate::analysis::inference;
 use crate::analysis::inference::Inferrer;
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{ResolutionError, Resolver};
+use crate::analysis::resolver::{GlobalName, GlobalType, ResolutionError, Resolver};
 use crate::custom::{CustomFn, CustomFnRegistry};
 use crate::interpreter::{Value, ValueDisplay, eval_statement};
 use crate::lexer::Lexer;
@@ -88,11 +88,28 @@ impl Repl {
                 source,
             })?;
 
-        self.inferrer.register_custom_type((None, name_id), scheme.clone());
-        self.type_env.insert((None, name_id), scheme);
+        self.inferrer.register_custom_type(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            scheme.clone(),
+        );
+        self.type_env.insert(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            scheme,
+        );
         let custom_id = self.custom_fns.register(name_id, func);
-        self.runtime_env
-            .insert((None, name_id), Rc::new(Value::Custom(custom_id)));
+        self.runtime_env.insert(
+            GlobalName {
+                krate: None,
+                name: name_id,
+            },
+            Rc::new(Value::Custom(custom_id)),
+        );
 
         Ok(())
     }

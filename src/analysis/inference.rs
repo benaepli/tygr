@@ -55,7 +55,10 @@ impl Type {
     }
 
     pub fn simple(name: TypeName) -> Rc<Self> {
-        Self::new(TypeKind::Con((None, name)), Rc::new(Kind::Star))
+        Self::new(
+            TypeKind::Con(GlobalType { krate: None, name }),
+            Rc::new(Kind::Star),
+        )
     }
 }
 
@@ -92,7 +95,8 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                 let rhs_display = TypeDisplay::new(rhs.clone(), self.name_table);
                 write!(f, "{}[{}]", lhs_display, rhs_display)
             }
-            TypeKind::AliasHead((_, name), args) => {
+            TypeKind::AliasHead(gt, args) => {
+                let name = &gt.name;
                 write!(f, "{}", self.name_table.lookup_local_type_name(name))?;
                 for arg in args {
                     let arg_display = TypeDisplay::new(arg.clone(), self.name_table);
@@ -961,9 +965,18 @@ impl Inferrer {
 
     fn get_list_constructor(&self) -> Rc<Type> {
         let kind = self
-            .lookup_kind(&(None, LIST_TYPE))
+            .lookup_kind(&GlobalType {
+                krate: None,
+                name: LIST_TYPE,
+            })
             .expect("List type kind not found");
-        Type::new(TypeKind::Con((None, LIST_TYPE)), kind)
+        Type::new(
+            TypeKind::Con(GlobalType {
+                krate: None,
+                name: LIST_TYPE,
+            }),
+            kind,
+        )
     }
 
     fn infer_pattern(
@@ -1452,7 +1465,13 @@ impl Inferrer {
                     let is_value = value.kind.is_syntactic_value();
                     for param_id in type_params {
                         let ty = Type::new(self.new_type(), self.new_kind());
-                        self.type_ctx.insert((None, param_id), ty);
+                        self.type_ctx.insert(
+                            GlobalType {
+                                krate: None,
+                                name: param_id,
+                            },
+                            ty,
+                        );
                     }
 
                     let typed_value = self.infer_type(&env, *value)?;
@@ -1523,7 +1542,13 @@ impl Inferrer {
         let is_value = value.kind.is_syntactic_value();
         for param_id in type_params {
             let ty = Type::new(self.new_type(), self.new_kind());
-            self.type_ctx.insert((None, param_id), ty);
+            self.type_ctx.insert(
+                GlobalType {
+                    krate: None,
+                    name: param_id,
+                },
+                ty,
+            );
         }
 
         let typed_value = self.infer_type(env, *value)?;

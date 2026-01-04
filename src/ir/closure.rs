@@ -283,7 +283,9 @@ impl Converter {
     fn convert_pattern(&self, pat: TypedPattern) -> Pattern {
         let ty = pat.ty.clone();
         let kind = match pat.kind {
-            TypedPatternKind::Var { name: (_cid, name) } => PatternKind::Var(name),
+            TypedPatternKind::Var {
+                name: GlobalName { name, .. },
+            } => PatternKind::Var(name),
             TypedPatternKind::Wildcard => PatternKind::Wildcard,
             TypedPatternKind::Unit => PatternKind::Unit,
             TypedPatternKind::Pair(p1, p2) => PatternKind::Pair(
@@ -315,7 +317,9 @@ impl Converter {
         scope: &mut HashMap<Name, VarSource>,
     ) {
         match &pat.kind {
-            TypedPatternKind::Var { name: (_cid, name) } => {
+            TypedPatternKind::Var {
+                name: GlobalName { name, .. },
+            } => {
                 scope.insert(*name, VarSource::Local(*name, pat.ty.clone()));
             }
             TypedPatternKind::Pair(p1, p2) | TypedPatternKind::Cons(p1, p2) => {
@@ -364,7 +368,7 @@ impl Converter {
                 ty,
             },
             TypedKind::Var(global_name) => {
-                let (_cid, name) = global_name;
+                let GlobalName { name, .. } = global_name;
                 let kind = match scope.get(&name) {
                     Some(VarSource::Local(n, _)) => ExprKind::Local(*n),
                     Some(VarSource::Env { field, .. }) => ExprKind::EnvAccess { field: *field },
@@ -384,18 +388,18 @@ impl Converter {
                 captures,
             } => {
                 let mut sorted_captures: Vec<_> = captures.into_iter().collect();
-                sorted_captures.sort_by(|a, b| a.0.cmp(&b.0));
+                sorted_captures.sort_by(|a, b| a.krate.cmp(&b.krate));
 
                 let mut env_fields = Vec::new();
                 let mut env_init_exprs = Vec::new();
                 let mut inner_scope = HashMap::new();
 
                 for cap_global_name in sorted_captures {
-                    let (_cid, cap_name) = cap_global_name;
+                    let GlobalName { name, .. } = cap_global_name;
                     if self.globals.contains_key(&cap_global_name) {
                         continue;
                     }
-                    let (source_expr_kind, cap_ty) = match scope.get(&cap_name) {
+                    let (source_expr_kind, cap_ty) = match scope.get(&name) {
                         Some(VarSource::Local(n, t)) => (ExprKind::Local(*n), t.clone()),
                         Some(VarSource::Env { field, ty }) => {
                             (ExprKind::EnvAccess { field: *field }, ty.clone())
@@ -414,7 +418,7 @@ impl Converter {
                         },
                     ));
                     inner_scope.insert(
-                        cap_name,
+                        name,
                         VarSource::Env {
                             field: field_name,
                             ty: cap_ty,
@@ -422,8 +426,14 @@ impl Converter {
                     );
                 }
 
-                let fn_name = (None, self.next_name());
-                let env_struct_name = (None, self.next_type());
+                let fn_name = GlobalName {
+                    krate: None,
+                    name: self.next_name(),
+                };
+                let env_struct_name = GlobalType {
+                    krate: None,
+                    name: self.next_type(),
+                };
                 let env_param_name = self.next_name();
                 let arg_param_name = self.next_name();
 

@@ -142,7 +142,10 @@ impl Resolver {
                     for scope in self.type_scopes.iter().rev() {
                         if let Some(id) = scope.get(name) {
                             return Ok(ResolvedAnnotation::new(
-                                ResolvedAnnotationKind::Var((None, *id)),
+                                ResolvedAnnotationKind::Var(GlobalType {
+                                    krate: None,
+                                    name: *id,
+                                }),
                                 span,
                             ));
                         }
@@ -151,17 +154,26 @@ impl Resolver {
                     // Check builtins
                     if let Some(id) = BUILTIN_TYPES.get(name) {
                         return Ok(ResolvedAnnotation::new(
-                            ResolvedAnnotationKind::Var((None, *id)),
+                            ResolvedAnnotationKind::Var(GlobalType {
+                                krate: None,
+                                name: *id,
+                            }),
                             span,
                         ));
                     } else if let Some(id) = self.type_aliases.get(name) {
                         return Ok(ResolvedAnnotation::new(
-                            ResolvedAnnotationKind::Alias((None, *id)),
+                            ResolvedAnnotationKind::Alias(GlobalType {
+                                krate: None,
+                                name: *id,
+                            }),
                             span,
                         ));
                     } else if let Some(id) = self.variants.get(name) {
                         return Ok(ResolvedAnnotation::new(
-                            ResolvedAnnotationKind::Var((None, *id)),
+                            ResolvedAnnotationKind::Var(GlobalType {
+                                krate: None,
+                                name: *id,
+                            }),
                             span,
                         ));
                     }
@@ -250,7 +262,10 @@ impl Resolver {
         for generic in alias.generics {
             let id = self.new_id();
             type_scope.insert(generic.name, id);
-            generic_ids.push((None, id));
+            generic_ids.push(GlobalType {
+                krate: None,
+                name: id,
+            });
         }
 
         self.type_scopes.push(type_scope);
@@ -258,7 +273,10 @@ impl Resolver {
         self.type_scopes.pop();
 
         Ok(ResolvedTypeAlias {
-            name: (None, id),
+            name: GlobalType {
+                krate: None,
+                name: id,
+            },
             type_params: generic_ids,
             body: resolved_body,
         })
@@ -294,7 +312,10 @@ impl Resolver {
             let id = self.new_id();
             self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
-            generic_ids.push((None, id));
+            generic_ids.push(GlobalType {
+                krate: None,
+                name: id,
+            });
         }
         self.type_scopes.push(type_scope);
         for (name, constructor) in variant.constructors.into_iter() {
@@ -312,9 +333,15 @@ impl Resolver {
                 None => None,
             };
             constructors.insert(
-                (None, name_id),
+                GlobalName {
+                    krate: None,
+                    name: name_id,
+                },
                 ResolvedConstructor {
-                    name: (None, name_id),
+                    name: GlobalName {
+                        krate: None,
+                        name: name_id,
+                    },
                     annotation: resolved_annotation,
                     span: constructor.span,
                 },
@@ -323,7 +350,10 @@ impl Resolver {
         }
         self.type_scopes.pop();
         Ok(ResolvedVariant {
-            name: (None, def_id),
+            name: GlobalType {
+                krate: None,
+                name: def_id,
+            },
             type_params: generic_ids,
             constructors,
             span: variant.span,
@@ -359,7 +389,10 @@ impl Resolver {
             let id = self.new_id();
             self.type_name_origins.insert(id, generic.name.clone());
             type_scope.insert(generic.name, id);
-            generic_ids.push((None, id));
+            generic_ids.push(GlobalType {
+                krate: None,
+                name: id,
+            });
         }
 
         self.type_scopes.push(type_scope);
@@ -372,7 +405,13 @@ impl Resolver {
         self.type_scopes.pop();
 
         Ok(ResolvedDefinition {
-            name: ((None, name_id), def.name),
+            name: (
+                GlobalName {
+                    krate: None,
+                    name: name_id,
+                },
+                def.name,
+            ),
             expr: Box::new(resolved_expr),
             type_params: generic_ids,
             annotation: resolved_annot,
@@ -607,7 +646,10 @@ impl Resolver {
                     return Err(ResolutionError::DuplicateBinding(name, span));
                 }
                 Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Var((None, new_id)),
+                    ResolvedPatternKind::Var(GlobalName {
+                        krate: None,
+                        name: new_id,
+                    }),
                     span,
                 ))
             }
@@ -639,7 +681,17 @@ impl Resolver {
                     None => None,
                 };
                 Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Constructor((None, variant_id), (None, ctor_id), resolved),
+                    ResolvedPatternKind::Constructor(
+                        GlobalType {
+                            krate: None,
+                            name: variant_id,
+                        },
+                        GlobalName {
+                            krate: None,
+                            name: ctor_id,
+                        },
+                        resolved,
+                    ),
                     span,
                 ))
             }
@@ -665,7 +717,7 @@ impl Resolver {
     fn resolve_local_statement(
         &mut self,
         stmt: Statement,
-    ) -> Result<(ResolvedStatement, HashSet<(Option<CrateId>, Name)>), ResolutionError> {
+    ) -> Result<(ResolvedStatement, HashSet<GlobalName>), ResolutionError> {
         let span = stmt.span;
         match stmt.kind {
             StatementKind::Let(pattern, value, generics, annot) => {
@@ -730,10 +782,7 @@ impl Resolver {
         }
     }
 
-    fn analyze(
-        &mut self,
-        expr: Expr,
-    ) -> Result<(Resolved, HashSet<(Option<CrateId>, Name)>), ResolutionError> {
+    fn analyze(&mut self, expr: Expr) -> Result<(Resolved, HashSet<GlobalName>), ResolutionError> {
         let span = expr.span;
         match expr.kind {
             ExprKind::Var(path) => {
@@ -747,9 +796,18 @@ impl Resolver {
                                 ));
                             } else {
                                 let mut free = HashSet::new();
-                                free.insert((None, *id));
+                                free.insert(GlobalName {
+                                    krate: None,
+                                    name: *id,
+                                });
                                 return Ok((
-                                    Resolved::new(ResolvedKind::Var((None, *id)), span),
+                                    Resolved::new(
+                                        ResolvedKind::Var(GlobalName {
+                                            krate: None,
+                                            name: *id,
+                                        }),
+                                        span,
+                                    ),
                                     free,
                                 ));
                             }
@@ -758,7 +816,16 @@ impl Resolver {
                     if let Some((variant_id, ctor_id)) = self.constructors.get(name).cloned() {
                         return Ok((
                             Resolved::new(
-                                ResolvedKind::Constructor((None, variant_id), (None, ctor_id)),
+                                ResolvedKind::Constructor(
+                                    GlobalType {
+                                        krate: None,
+                                        name: variant_id,
+                                    },
+                                    GlobalName {
+                                        krate: None,
+                                        name: ctor_id,
+                                    },
+                                ),
                                 span,
                             ),
                             HashSet::new(),
@@ -849,13 +916,25 @@ impl Resolver {
                 for (name_str, expr) in fields {
                     let (resolved_expr, free_vars) = self.analyze(expr)?;
                     let name_id = *new_scope.get(&name_str).unwrap();
-                    resolved_fields.insert(name_str, ((None, name_id), resolved_expr));
+                    resolved_fields.insert(
+                        name_str,
+                        (
+                            GlobalName {
+                                krate: None,
+                                name: name_id,
+                            },
+                            resolved_expr,
+                        ),
+                    );
                     all_free.extend(free_vars);
                 }
                 self.scopes.pop();
 
                 for name_id in new_scope.values() {
-                    all_free.remove(&(None, *name_id));
+                    all_free.remove(&GlobalName {
+                        krate: None,
+                        name: *name_id,
+                    });
                 }
 
                 Ok((
@@ -922,7 +1001,10 @@ impl Resolver {
                 self.scopes.pop();
 
                 for &name_id in new_scope.values() {
-                    free_in_body.remove(&(None, name_id));
+                    free_in_body.remove(&GlobalName {
+                        krate: None,
+                        name: name_id,
+                    });
                 }
 
                 Ok((
@@ -970,7 +1052,10 @@ impl Resolver {
                     self.scopes.pop();
 
                     for &name_id in new_scope.values() {
-                        free_in_body.remove(&(None, name_id));
+                        free_in_body.remove(&GlobalName {
+                            krate: None,
+                            name: name_id,
+                        });
                     }
 
                     all_free = all_free.union(&free_in_body).cloned().collect();
@@ -1020,7 +1105,10 @@ impl Resolver {
 
                 let block_scope = self.scopes.pop().unwrap();
                 for &name_id in block_scope.values() {
-                    all_free.remove(&(None, name_id));
+                    all_free.remove(&GlobalName {
+                        krate: None,
+                        name: name_id,
+                    });
                 }
 
                 Ok((
