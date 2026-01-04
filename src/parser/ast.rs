@@ -114,7 +114,7 @@ pub enum PathBase {
     Super(usize),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Visibility {
     Public,
     Private,

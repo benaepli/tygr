@@ -56,7 +56,7 @@ pub struct ResolvedDefinition {
 
 #[derive(Debug, Clone)]
 pub enum ResolvedValueDefinition {
-    Constructor(TypeName),
+    Constructor(GlobalType, GlobalName),
     Definition(ResolvedDefinition),
 }
 
@@ -241,12 +241,24 @@ pub struct ResolvedTypeAlias {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(super) enum DefinitionInfo {
+    Definition(Name),
+    Constructor(TypeName, Name),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum TypeInfo {
+    Alias(TypeName),
+    Variant(TypeName),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedModuleData {
     pub id: ModuleId,
     pub parent: Option<ModuleId>,
 
-    pub definitions: HashMap<String, (CrateId, Name, Visibility)>,
-    pub types: HashMap<String, (CrateId, TypeName, Visibility)>,
+    pub definitions: HashMap<String, (CrateId, DefinitionInfo, Visibility)>,
+    pub types: HashMap<String, (CrateId, TypeInfo, Visibility)>,
     pub modules: HashMap<String, (CrateId, ModuleId, Visibility)>,
 
     pub scope: DfsScope,
@@ -259,8 +271,10 @@ pub struct CrateId(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resolution {
-    Def(CrateId, Name),
-    Type(CrateId, TypeName),
+    Def(GlobalName),
+    Constructor(GlobalType, GlobalName),
+    Variant(GlobalType),
+    TypeAlias(GlobalType),
     Module(CrateId, ModuleId),
 }
 
@@ -314,11 +328,11 @@ pub struct CrateDefMap {
 
     pub extern_prelude: ExternPrelude,
 
-    pub definitions: HashMap<Name, ResolvedDefinition>,
+    pub definitions: HashMap<Name, ResolvedValueDefinition>,
     pub types: HashMap<TypeName, ResolvedTypeDefinition>,
 
     pub defs_to_resolve: HashMap<Name, (Definition, ModuleId)>,
-    pub variants_to_resolve: HashMap<TypeName, (Variant, ModuleId)>,
+    pub variants_to_resolve: HashMap<TypeName, (Variant, ModuleId, HashMap<String, Name>)>,
     pub aliases_to_resolve: HashMap<TypeName, (TypeAlias, ModuleId)>,
     pub unresolved_imports: Vec<UnresolvedImport>,
 }
@@ -330,7 +344,7 @@ pub enum Namespace {
 
 #[derive(Debug, Clone, Default)]
 pub struct World {
-    crates: HashMap<CrateId, CrateDefMap>,
+    pub(crate) crates: HashMap<CrateId, CrateDefMap>,
 }
 
 impl World {
@@ -376,7 +390,7 @@ impl World {
             if is_last_segment {
                 match target_namespace {
                     Namespace::Value => {
-                        if let Some((c, id, vis)) = mod_data.definitions.get(segment_name) {
+                        if let Some((c, info, vis)) = mod_data.definitions.get(segment_name) {
                             self.check_visibility(
                                 vis,
                                 *c,
@@ -384,11 +398,30 @@ impl World {
                                 start_crate,
                                 start_module,
                             )?;
-                            return Ok(Resolution::Def(*c, *id));
+                            match info {
+                                DefinitionInfo::Definition(id) => {
+                                    return Ok(Resolution::Def(GlobalName {
+                                        krate: Some(*c),
+                                        name: *id,
+                                    }));
+                                }
+                                DefinitionInfo::Constructor(ty, id) => {
+                                    return Ok(Resolution::Constructor(
+                                        GlobalType {
+                                            krate: Some(*c),
+                                            name: *ty,
+                                        },
+                                        GlobalName {
+                                            krate: Some(*c),
+                                            name: *id,
+                                        },
+                                    ));
+                                }
+                            }
                         }
                     }
                     Namespace::Type => {
-                        if let Some((c, id, vis)) = mod_data.types.get(segment_name) {
+                        if let Some((c, info, vis)) = mod_data.types.get(segment_name) {
                             self.check_visibility(
                                 vis,
                                 *c,
@@ -396,7 +429,20 @@ impl World {
                                 start_crate,
                                 start_module,
                             )?;
-                            return Ok(Resolution::Type(*c, *id));
+                            match info {
+                                TypeInfo::Variant(variant) => {
+                                    return Ok(Resolution::Variant(GlobalType {
+                                        krate: Some(*c),
+                                        name: *variant,
+                                    }));
+                                }
+                                TypeInfo::Alias(alias) => {
+                                    return Ok(Resolution::TypeAlias(GlobalType {
+                                        krate: Some(*c),
+                                        name: *alias,
+                                    }));
+                                }
+                            }
                         }
                     }
                 }

@@ -2,11 +2,12 @@ mod ast;
 pub use ast::*;
 
 use crate::builtin::{BUILTIN_TYPES, BUILTINS, BuiltinFn, TYPE_BASE};
-use crate::driver::Crate;
+use crate::driver::{Crate, ModuleId};
 use crate::parser::{
     Annotation, AnnotationKind, Declaration, Definition, Expr, ExprKind, Generic, ModuleDecl, Path,
     Pattern, PatternKind, SourceId, Span, Statement, StatementKind, TypeAlias, UseDecl, Variant,
 };
+use bimap::BiMap;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -33,8 +34,10 @@ pub enum ResolutionError {
 type Scope = HashMap<String, GlobalName>;
 type TypeScope = HashMap<String, GlobalType>;
 
+#[derive(Debug)]
 struct ResolveContext {
     crate_id: Option<CrateId>,
+    module_id: Option<ModuleId>,
     next_id: Name,
     next_type: TypeName,
 
@@ -42,10 +45,17 @@ struct ResolveContext {
     type_name_origins: HashMap<TypeName, String>,
 }
 
+impl Default for ResolveContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResolveContext {
     fn new() -> Self {
         Self {
             crate_id: None,
+            module_id: None,
             next_id: Name(0),
             next_type: TYPE_BASE,
             name_origins: HashMap::new(),
@@ -68,6 +78,7 @@ impl ResolveContext {
     }
 }
 
+#[derive(Debug, Default)]
 struct ScopeContext {
     scopes: Vec<Scope>,
     type_scopes: Vec<TypeScope>,
@@ -75,6 +86,8 @@ struct ScopeContext {
     global_aliases: HashMap<String, TypeName>,
     global_variants: HashMap<String, TypeName>,
     global_constructors: HashMap<String, (TypeName, Name)>,
+
+    world: World,
 }
 
 impl ScopeContext {
@@ -86,14 +99,14 @@ impl ScopeContext {
             global_aliases: HashMap::new(),
             global_variants: HashMap::new(),
             global_constructors: HashMap::new(),
+            world: World::default(),
         }
     }
 }
 
 pub struct Resolver {
-    ctx: ResolveContext,
+    global_ctx: ResolveContext,
     scope_ctx: ScopeContext,
-    world: World,
 }
 
 impl Default for Resolver {
@@ -128,9 +141,8 @@ impl Resolver {
         scope_ctx.scopes.push(global);
 
         Self {
-            ctx,
+            global_ctx: ctx,
             scope_ctx,
-            world: World::default(),
         }
     }
 
@@ -147,7 +159,7 @@ impl Resolver {
                 },
             ));
         }
-        let id = self.ctx.new_name(name.to_string());
+        let id = self.global_ctx.new_name(name.to_string());
         self.scope_ctx.scopes[0].insert(
             name.to_string(),
             GlobalName {
@@ -159,6 +171,7 @@ impl Resolver {
     }
 
     fn resolve_annotation(
+        ctx: &ResolveContext,
         scope_ctx: &mut ScopeContext,
         annot: Annotation,
     ) -> Result<ResolvedAnnotation, ResolutionError> {
@@ -203,12 +216,36 @@ impl Resolver {
                         ));
                     }
                 }
+
+                // Check crates via world
+                if let (Some(c_id), Some(m_id)) = (ctx.crate_id, ctx.module_id) {
+                    match scope_ctx
+                        .world
+                        .resolve(c_id, m_id, path.clone(), Namespace::Type)
+                    {
+                        Ok(Resolution::Variant(gt)) => {
+                            return Ok(ResolvedAnnotation::new(
+                                ResolvedAnnotationKind::Var(gt),
+                                span,
+                            ));
+                        }
+                        Ok(Resolution::TypeAlias(gt)) => {
+                            return Ok(ResolvedAnnotation::new(
+                                ResolvedAnnotationKind::Alias(gt),
+                                span,
+                            ));
+                        }
+                        Err(e) => return Err(e),
+                        _ => {}
+                    }
+                }
+
                 Err(ResolutionError::VariableNotFound(path, span))
             }
 
             AnnotationKind::App(lhs, rhs) => {
-                let r_lhs = Self::resolve_annotation(scope_ctx, *lhs)?;
-                let r_rhs = Self::resolve_annotation(scope_ctx, *rhs)?;
+                let r_lhs = Self::resolve_annotation(ctx, scope_ctx, *lhs)?;
+                let r_rhs = Self::resolve_annotation(ctx, scope_ctx, *rhs)?;
                 Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::App(Box::new(r_lhs), Box::new(r_rhs)),
                     span,
@@ -216,8 +253,8 @@ impl Resolver {
             }
 
             AnnotationKind::Pair(lhs, rhs) => {
-                let r_lhs = Self::resolve_annotation(scope_ctx, *lhs)?;
-                let r_rhs = Self::resolve_annotation(scope_ctx, *rhs)?;
+                let r_lhs = Self::resolve_annotation(ctx, scope_ctx, *lhs)?;
+                let r_rhs = Self::resolve_annotation(ctx, scope_ctx, *rhs)?;
                 Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Pair(Box::new(r_lhs), Box::new(r_rhs)),
                     span,
@@ -225,8 +262,8 @@ impl Resolver {
             }
 
             AnnotationKind::Lambda(param, ret) => {
-                let r_param = Self::resolve_annotation(scope_ctx, *param)?;
-                let r_ret = Self::resolve_annotation(scope_ctx, *ret)?;
+                let r_param = Self::resolve_annotation(ctx, scope_ctx, *param)?;
+                let r_ret = Self::resolve_annotation(ctx, scope_ctx, *ret)?;
                 Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Lambda(Box::new(r_param), Box::new(r_ret)),
                     span,
@@ -239,7 +276,7 @@ impl Resolver {
                     if resolved.contains_key(&k) {
                         return Err(ResolutionError::DuplicateRecordField(k, span));
                     }
-                    resolved.insert(k, Self::resolve_annotation(scope_ctx, v)?);
+                    resolved.insert(k, Self::resolve_annotation(ctx, scope_ctx, v)?);
                 }
                 Ok(ResolvedAnnotation::new(
                     ResolvedAnnotationKind::Record(resolved),
@@ -260,7 +297,7 @@ impl Resolver {
             ));
         }
 
-        let id = self.ctx.new_id(alias.name.clone());
+        let id = self.global_ctx.new_id(alias.name.clone());
         self.scope_ctx.global_aliases.insert(alias.name.clone(), id);
         Ok(id)
     }
@@ -290,14 +327,15 @@ impl Resolver {
         for generic in alias.generics {
             let id = GlobalType {
                 krate: None,
-                name: self.ctx.new_id(generic.name.clone()),
+                name: self.global_ctx.new_id(generic.name.clone()),
             };
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
         }
 
         self.scope_ctx.type_scopes.push(type_scope);
-        let resolved_body = Self::resolve_annotation(&mut self.scope_ctx, alias.body)?;
+        let resolved_body =
+            Self::resolve_annotation(&self.global_ctx, &mut self.scope_ctx, alias.body)?;
         self.scope_ctx.type_scopes.pop();
 
         Ok(ResolvedTypeAlias {
@@ -317,7 +355,7 @@ impl Resolver {
                 variant.span,
             ));
         }
-        let def_id = self.ctx.new_id(variant.name.clone());
+        let def_id = self.global_ctx.new_id(variant.name.clone());
         self.scope_ctx
             .global_variants
             .insert(variant.name.clone(), def_id);
@@ -341,7 +379,7 @@ impl Resolver {
         for generic in variant.generics.clone() {
             let id = GlobalType {
                 krate: None,
-                name: self.ctx.new_id(generic.name.clone()),
+                name: self.global_ctx.new_id(generic.name.clone()),
             };
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
@@ -355,9 +393,13 @@ impl Resolver {
                 ));
             }
 
-            let name_id = self.ctx.new_name(name.clone());
+            let name_id = self.global_ctx.new_name(name.clone());
             let resolved_annotation = match constructor.annotation {
-                Some(annot) => Some(Self::resolve_annotation(&mut self.scope_ctx, annot)?),
+                Some(annot) => Some(Self::resolve_annotation(
+                    &self.global_ctx,
+                    &mut self.scope_ctx,
+                    annot,
+                )?),
                 None => None,
             };
             constructors.insert(
@@ -400,7 +442,7 @@ impl Resolver {
 
         let id = GlobalName {
             krate: None,
-            name: self.ctx.new_name(def.name.clone()),
+            name: self.global_ctx.new_name(def.name.clone()),
         };
         self.scope_ctx.scopes[0].insert(def.name.clone(), id);
         Ok(())
@@ -420,7 +462,7 @@ impl Resolver {
         for generic in def.generics {
             let id = GlobalType {
                 krate: None,
-                name: self.ctx.new_id(generic.name.clone()),
+                name: self.global_ctx.new_id(generic.name.clone()),
             };
             type_scope.insert(generic.name, id);
             generic_ids.push(id);
@@ -428,12 +470,16 @@ impl Resolver {
 
         self.scope_ctx.type_scopes.push(type_scope);
         let resolved_annot = if let Some(annot) = def.annotation {
-            Some(Self::resolve_annotation(&mut self.scope_ctx, annot)?)
+            Some(Self::resolve_annotation(
+                &self.global_ctx,
+                &mut self.scope_ctx,
+                annot,
+            )?)
         } else {
             None
         };
         let (resolved_expr, _free_vars) =
-            Self::analyze(&mut self.ctx, &mut self.scope_ctx, def.expr)?;
+            Self::analyze(&mut self.global_ctx, &mut self.scope_ctx, def.expr)?;
         self.scope_ctx.type_scopes.pop();
 
         Ok(ResolvedDefinition {
@@ -457,10 +503,14 @@ impl Resolver {
                 def.span,
             ));
         }
-        let name_id = self.ctx.new_name(def.name.clone());
+        let name_id = self.global_ctx.new_name(def.name.clone());
         resolved_module.definitions.insert(
             def.name.clone(),
-            (resolved_crate.crate_id, name_id, def.vis.clone()),
+            (
+                resolved_crate.crate_id,
+                DefinitionInfo::Definition(name_id),
+                def.vis.clone(),
+            ),
         );
         resolved_crate
             .defs_to_resolve
@@ -473,7 +523,6 @@ impl Resolver {
         resolved_crate: &mut CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         alias: TypeAlias,
-        crate_id: CrateId,
     ) -> Result<(), ResolutionError> {
         if resolved_module.types.contains_key(&alias.name) {
             return Err(ResolutionError::DuplicateTypeAlias(
@@ -482,11 +531,16 @@ impl Resolver {
             ));
         }
 
-        let id = self.ctx.new_id(alias.name.clone());
+        let id = self.global_ctx.new_id(alias.name.clone());
 
-        resolved_module
-            .types
-            .insert(alias.name.clone(), (crate_id, id, alias.vis.clone()));
+        resolved_module.types.insert(
+            alias.name.clone(),
+            (
+                resolved_crate.crate_id,
+                TypeInfo::Alias(id),
+                alias.vis.clone(),
+            ),
+        );
 
         resolved_crate
             .aliases_to_resolve
@@ -499,7 +553,6 @@ impl Resolver {
         resolved_crate: &mut CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         variant: Variant,
-        crate_id: CrateId,
     ) -> Result<(), ResolutionError> {
         if resolved_module.types.contains_key(&variant.name) {
             return Err(ResolutionError::DuplicateVariant(
@@ -508,15 +561,42 @@ impl Resolver {
             ));
         }
 
-        let id = self.ctx.new_id(variant.name.clone());
+        let id = self.global_ctx.new_id(variant.name.clone());
 
-        resolved_module
-            .types
-            .insert(variant.name.clone(), (crate_id, id, variant.vis.clone()));
+        resolved_module.types.insert(
+            variant.name.clone(),
+            (
+                resolved_crate.crate_id,
+                TypeInfo::Variant(id),
+                variant.vis.clone(),
+            ),
+        );
+
+        // Register each constructor in the definitions map and collect name mappings
+        let mut ctor_name_map = HashMap::new();
+        for (ctor_name, ctor) in &variant.constructors {
+            if resolved_module.definitions.contains_key(ctor_name) {
+                return Err(ResolutionError::DuplicateConstructor(
+                    ctor_name.clone(),
+                    ctor.span,
+                ));
+            }
+            let ctor_id = self.global_ctx.new_name(ctor_name.clone());
+            ctor_name_map.insert(ctor_name.clone(), ctor_id);
+            resolved_module.definitions.insert(
+                ctor_name.clone(),
+                (
+                    resolved_crate.crate_id,
+                    DefinitionInfo::Constructor(id, ctor_id),
+                    variant.vis.clone(),
+                ),
+            );
+        }
 
         resolved_crate
             .variants_to_resolve
-            .insert(id, (variant, resolved_module.id));
+            .insert(id, (variant, resolved_module.id, ctor_name_map));
+
         Ok(())
     }
 
@@ -525,7 +605,332 @@ impl Resolver {
         resolved_crate: &CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         module_decl: ModuleDecl,
-    ) {
+        module_paths: &BiMap<Vec<String>, ModuleId>,
+    ) -> Result<(), ResolutionError> {
+        let parent_path = module_paths
+            .get_by_right(&resolved_module.id)
+            .expect("Parent module ID must be present in driver paths");
+
+        let mut child_path = parent_path.clone();
+        child_path.push(module_decl.name.clone());
+
+        let child_module_id = module_paths
+            .get_by_left(&child_path)
+            .expect("Child module found in AST but not loaded by driver");
+
+        if resolved_module.modules.contains_key(&module_decl.name) {
+            return Err(ResolutionError::DuplicateBinding(
+                module_decl.name.clone(),
+                module_decl.span,
+            ));
+        }
+
+        resolved_module.modules.insert(
+            module_decl.name,
+            (resolved_crate.crate_id, *child_module_id, module_decl.vis),
+        );
+
+        Ok(())
+    }
+
+    fn import_resolution(
+        resolved_crate: &mut CrateDefMap,
+        import: &UnresolvedImport,
+        resolution: Resolution,
+    ) -> Result<(), ResolutionError> {
+        let module_data = resolved_crate
+            .modules
+            .get_mut(&import.module_id)
+            .expect("Module ID from import must exist");
+
+        let name = match &import.alias {
+            Some(a) => a.clone(),
+            None => import
+                .path
+                .segments
+                .last()
+                .expect("Import path cannot be empty")
+                .clone(),
+        };
+        let get_crate = |k: Option<CrateId>| k.unwrap_or(resolved_crate.crate_id);
+
+        match resolution {
+            Resolution::Def(gn) => {
+                if module_data.definitions.contains_key(&name) {
+                    return Err(ResolutionError::DuplicateBinding(name, import.span));
+                }
+                module_data.definitions.insert(
+                    name,
+                    (
+                        get_crate(gn.krate),
+                        DefinitionInfo::Definition(gn.name),
+                        import.vis,
+                    ),
+                );
+            }
+            Resolution::Constructor(gt, gn) => {
+                if module_data.definitions.contains_key(&name) {
+                    return Err(ResolutionError::DuplicateConstructor(name, import.span));
+                }
+                module_data.definitions.insert(
+                    name,
+                    (
+                        get_crate(gt.krate),
+                        DefinitionInfo::Constructor(gt.name, gn.name),
+                        import.vis,
+                    ),
+                );
+            }
+            Resolution::Variant(gt) => {
+                if module_data.types.contains_key(&name) {
+                    return Err(ResolutionError::DuplicateVariant(name, import.span));
+                }
+                module_data.types.insert(
+                    name,
+                    (get_crate(gt.krate), TypeInfo::Variant(gt.name), import.vis),
+                );
+            }
+            Resolution::TypeAlias(gt) => {
+                if module_data.types.contains_key(&name) {
+                    return Err(ResolutionError::DuplicateTypeAlias(name, import.span));
+                }
+                module_data.types.insert(
+                    name,
+                    (get_crate(gt.krate), TypeInfo::Alias(gt.name), import.vis),
+                );
+            }
+            Resolution::Module(c, m) => {
+                if module_data.modules.contains_key(&name) {
+                    return Err(ResolutionError::DuplicateBinding(name, import.span));
+                }
+                module_data.modules.insert(name, (c, m, import.vis));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_imports(&mut self, resolved: &mut CrateDefMap) -> Result<(), ResolutionError> {
+        loop {
+            let mut progress = false;
+            let pending_imports = std::mem::take(&mut resolved.unresolved_imports);
+            let mut next_imports = Vec::new();
+
+            self.scope_ctx
+                .world
+                .crates
+                .insert(resolved.crate_id, resolved.clone());
+
+            for import in pending_imports {
+                let mut resolved_this_pass = false;
+
+                // Try resolving in Value Namespace
+                if let Ok(res) = self.scope_ctx.world.resolve(
+                    resolved.crate_id,
+                    import.module_id,
+                    import.path.clone(),
+                    Namespace::Value,
+                ) {
+                    Self::import_resolution(resolved, &import, res)?;
+                    resolved_this_pass = true;
+                }
+
+                // Try resolving in Type namespace
+                if let Ok(res) = self.scope_ctx.world.resolve(
+                    resolved.crate_id,
+                    import.module_id,
+                    import.path.clone(),
+                    Namespace::Type,
+                ) {
+                    Self::import_resolution(resolved, &import, res)?;
+                    resolved_this_pass = true;
+                }
+
+                if resolved_this_pass {
+                    progress = true;
+                } else {
+                    next_imports.push(import);
+                }
+            }
+
+            resolved.unresolved_imports = next_imports;
+
+            if resolved.unresolved_imports.is_empty() {
+                break;
+            }
+
+            if !progress {
+                let import = &resolved.unresolved_imports[0];
+                return Err(ResolutionError::VariableNotFound(
+                    import.path.clone(),
+                    import.span,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resolve_bodies(&mut self, resolved: &mut CrateDefMap) -> Result<(), ResolutionError> {
+        let mut ctx = ResolveContext {
+            crate_id: Some(resolved.crate_id),
+            ..Default::default()
+        };
+
+        for (id, (alias, mod_id)) in resolved.aliases_to_resolve.drain() {
+            ctx.module_id = Some(mod_id);
+
+            let mut type_params = Vec::new();
+            self.scope_ctx.type_scopes.push(HashMap::new());
+
+            for generic in alias.generics {
+                let gid = GlobalType {
+                    krate: Some(resolved.crate_id),
+                    name: ctx.new_id(generic.name.clone()),
+                };
+                self.scope_ctx
+                    .type_scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(generic.name, gid);
+                type_params.push(gid);
+            }
+
+            let body = Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, alias.body)?;
+            self.scope_ctx.type_scopes.pop();
+
+            resolved.types.insert(
+                id,
+                ResolvedTypeDefinition::Alias(ResolvedTypeAlias {
+                    name: GlobalType {
+                        krate: Some(resolved.crate_id),
+                        name: id,
+                    },
+                    type_params,
+                    body,
+                }),
+            );
+        }
+
+        // Resolve variants
+        for (id, (variant, mod_id, ctor_map)) in resolved.variants_to_resolve.drain() {
+            ctx.module_id = Some(mod_id);
+
+            let mut type_params = Vec::new();
+            self.scope_ctx.type_scopes.push(HashMap::new());
+
+            for generic in variant.generics {
+                let gid = GlobalType {
+                    krate: Some(resolved.crate_id),
+                    name: ctx.new_id(generic.name.clone()),
+                };
+                self.scope_ctx
+                    .type_scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(generic.name, gid);
+                type_params.push(gid);
+            }
+
+            let mut constructors = HashMap::new();
+            for (name, ctor) in variant.constructors {
+                let ctor_name_id = ctor_map[&name];
+                let gn = GlobalName {
+                    krate: Some(resolved.crate_id),
+                    name: ctor_name_id,
+                };
+
+                let annotation = if let Some(a) = ctor.annotation {
+                    Some(Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, a)?)
+                } else {
+                    None
+                };
+
+                let resolved_ctor = ResolvedConstructor {
+                    name: gn,
+                    annotation,
+                    span: ctor.span,
+                };
+
+                constructors.insert(gn, resolved_ctor);
+
+                // Register the constructor as a value definition
+                resolved.definitions.insert(
+                    ctor_name_id,
+                    ResolvedValueDefinition::Constructor(
+                        GlobalType {
+                            krate: Some(resolved.crate_id),
+                            name: id,
+                        },
+                        gn,
+                    ),
+                );
+            }
+
+            self.scope_ctx.type_scopes.pop();
+
+            resolved.types.insert(
+                id,
+                ResolvedTypeDefinition::Variant(ResolvedVariant {
+                    name: GlobalType {
+                        krate: Some(resolved.crate_id),
+                        name: id,
+                    },
+                    type_params,
+                    constructors,
+                    span: variant.span,
+                }),
+            );
+        }
+
+        // Resolve definitions
+        for (id, (def, mod_id)) in resolved.defs_to_resolve.drain() {
+            ctx.module_id = Some(mod_id);
+
+            let mut type_params = Vec::new();
+            self.scope_ctx.type_scopes.push(HashMap::new());
+
+            for generic in def.generics {
+                let gid = GlobalType {
+                    krate: Some(resolved.crate_id),
+                    name: ctx.new_id(generic.name.clone()),
+                };
+                self.scope_ctx
+                    .type_scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(generic.name, gid);
+                type_params.push(gid);
+            }
+
+            let annotation = if let Some(a) = def.annotation {
+                Some(Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, a)?)
+            } else {
+                None
+            };
+
+            debug_assert_eq!(self.scope_ctx.scopes.len(), 1, "Scope stack leaked!");
+
+            let (expr, _free) = Self::analyze(&mut self.global_ctx, &mut self.scope_ctx, def.expr)?;
+            self.scope_ctx.type_scopes.pop();
+            resolved.definitions.insert(
+                id,
+                ResolvedValueDefinition::Definition(ResolvedDefinition {
+                    name: (
+                        GlobalName {
+                            krate: Some(resolved.crate_id),
+                            name: id,
+                        },
+                        def.name,
+                    ),
+                    expr: Box::new(expr),
+                    type_params,
+                    annotation,
+                    span: def.span,
+                }),
+            );
+        }
+
+        Ok(())
     }
 
     pub fn resolve_crate(
@@ -547,7 +952,6 @@ impl Resolver {
             aliases_to_resolve: Default::default(),
             unresolved_imports: Vec::new(),
         };
-
         for (module_id, module) in krate.modules.drain() {
             let mut resolved_module = ResolvedModuleData {
                 id: module_id,
@@ -557,17 +961,25 @@ impl Resolver {
                 modules: Default::default(),
                 scope: module.scope,
             };
+            let module_paths = &krate.module_paths;
 
             for def in module.ast {
                 match def {
                     Declaration::Def(def) => {
                         self.declare_def(&mut resolved, &mut resolved_module, def)?
                     }
-                    Declaration::Variant(_) => {}
-                    Declaration::TypeAlias(_) => {}
-                    Declaration::Module(module_decl) => {
-                        self.declare_module(&mut resolved, &mut resolved_module, module_decl)
+                    Declaration::Variant(variant) => {
+                        self.declare_variant(&mut resolved, &mut resolved_module, variant)?
                     }
+                    Declaration::TypeAlias(alias) => {
+                        self.declare_type_alias(&mut resolved, &mut resolved_module, alias)?
+                    }
+                    Declaration::Module(module_decl) => self.declare_module(
+                        &mut resolved,
+                        &mut resolved_module,
+                        module_decl,
+                        module_paths,
+                    )?,
                     Declaration::Use(UseDecl {
                         path,
                         alias,
@@ -585,6 +997,12 @@ impl Resolver {
 
             resolved.modules.insert(module_id, resolved_module);
         }
+
+        // Second pass: definition
+        self.resolve_imports(&mut resolved)?;
+        self.resolve_bodies(&mut resolved)?;
+
+        self.scope_ctx.world.crates.insert(id, resolved);
         Ok(())
     }
 
@@ -600,7 +1018,7 @@ impl Resolver {
                 for generic in generics {
                     let id = GlobalType {
                         krate: None,
-                        name: self.ctx.new_id(generic.name.clone()),
+                        name: self.global_ctx.new_id(generic.name.clone()),
                     };
                     new_type_scope.insert(generic.name.clone(), id);
                     resolved_generics.push(id);
@@ -608,16 +1026,20 @@ impl Resolver {
                 self.scope_ctx.type_scopes.push(new_type_scope);
 
                 let resolved_annot = if let Some(a) = annot {
-                    Some(Self::resolve_annotation(&mut self.scope_ctx, a)?)
+                    Some(Self::resolve_annotation(
+                        &self.global_ctx,
+                        &mut self.scope_ctx,
+                        a,
+                    )?)
                 } else {
                     None
                 };
                 let (resolved_value, _free_in_value) =
-                    Self::analyze(&mut self.ctx, &mut self.scope_ctx, *value)?;
+                    Self::analyze(&mut self.global_ctx, &mut self.scope_ctx, *value)?;
                 let scope_idx = self.scope_ctx.scopes.len() - 1;
                 let mut pattern_scope = HashMap::new();
                 let resolved_pattern = Self::analyze_pattern(
-                    &mut self.ctx,
+                    &mut self.global_ctx,
                     &mut self.scope_ctx,
                     pattern,
                     &mut pattern_scope,
@@ -637,7 +1059,7 @@ impl Resolver {
             }
             StatementKind::Expr(expr) => {
                 let (resolved_expr, _free_in_expr) =
-                    Self::analyze(&mut self.ctx, &mut self.scope_ctx, *expr)?;
+                    Self::analyze(&mut self.global_ctx, &mut self.scope_ctx, *expr)?;
                 Ok(ResolvedStatement {
                     pattern: ResolvedPattern::new(ResolvedPatternKind::Wildcard, span),
                     value: Box::new(resolved_expr),
@@ -769,7 +1191,7 @@ impl Resolver {
                 scope_ctx.type_scopes.push(new_type_scope);
 
                 let resolved_annot = if let Some(a) = annot {
-                    Some(Self::resolve_annotation(scope_ctx, a)?)
+                    Some(Self::resolve_annotation(ctx, scope_ctx, a)?)
                 } else {
                     None
                 };
@@ -828,11 +1250,11 @@ impl Resolver {
         let span = expr.span;
         match expr.kind {
             ExprKind::Var(path) => {
+                // We first check in scopes and globals
                 if let Some(name) = path.simple() {
                     for scope in scope_ctx.scopes.iter().rev() {
                         if let Some(id) = scope.get(name) {
                             if let Some(builtin) = scope_ctx.builtins.get(&id.name) {
-                                // TODO: only for global scope
                                 return Ok((
                                     Resolved::new(ResolvedKind::Builtin(builtin.clone()), span),
                                     HashSet::new(),
@@ -865,6 +1287,30 @@ impl Resolver {
                         ));
                     }
                 }
+
+                // Next, we check crates
+                if let (Some(c_id), Some(m_id)) = (ctx.crate_id, ctx.module_id) {
+                    match scope_ctx
+                        .world
+                        .resolve(c_id, m_id, path.clone(), Namespace::Value)
+                    {
+                        Ok(Resolution::Def(gn)) => {
+                            return Ok((
+                                Resolved::new(ResolvedKind::Var(gn), span),
+                                HashSet::new(),
+                            ));
+                        }
+                        Ok(Resolution::Constructor(gt, gn)) => {
+                            return Ok((
+                                Resolved::new(ResolvedKind::Constructor(gt, gn), span),
+                                HashSet::new(),
+                            ));
+                        }
+                        Err(e) => return Err(e),
+                        _ => {}
+                    }
+                }
+
                 Err(ResolutionError::VariableNotFound(path, span))
             }
 
@@ -1014,7 +1460,7 @@ impl Resolver {
 
             ExprKind::Lambda(param_pattern, body, annot) => {
                 let resolved_annot = if let Some(a) = annot {
-                    Some(Self::resolve_annotation(scope_ctx, a)?)
+                    Some(Self::resolve_annotation(ctx, scope_ctx, a)?)
                 } else {
                     None
                 };
@@ -1145,8 +1591,8 @@ impl Resolver {
 
     pub fn snapshot_name_table(&self) -> crate::analysis::name_table::NameTable {
         crate::analysis::name_table::NameTable::with_maps(
-            self.ctx.name_origins.clone(),
-            self.ctx.type_name_origins.clone(),
+            self.global_ctx.name_origins.clone(),
+            self.global_ctx.type_name_origins.clone(),
         )
     }
 
@@ -1155,16 +1601,16 @@ impl Resolver {
     /// for use in error formatting and debugging.
     pub fn into_name_table(self) -> crate::analysis::name_table::NameTable {
         crate::analysis::name_table::NameTable::with_maps(
-            self.ctx.name_origins,
-            self.ctx.type_name_origins,
+            self.global_ctx.name_origins,
+            self.global_ctx.type_name_origins,
         )
     }
 
     pub fn next_name_id(&self) -> Name {
-        self.ctx.next_id
+        self.global_ctx.next_id
     }
 
     pub fn next_type_name_id(&self) -> TypeName {
-        self.ctx.next_type
+        self.global_ctx.next_type
     }
 }
