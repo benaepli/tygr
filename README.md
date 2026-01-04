@@ -129,13 +129,15 @@ my_project/
 You can find example programs demonstrating recursion, pattern matching, and type definitions in the `examples`
 directory.
 
-Here are a couple:
+Here are some scripts:
 
 * [examples/scripts/reduce.tygr](examples/scripts/reduce.tygr): Demonstrates list processing (`fold_left`/`fold_right`)
   and recursion.
 * [examples/scripts/mutual.tygr](examples/scripts/mutual.tygr): Demonstrates mutual recursion using
   recursive records.
 * [examples/scripts/calculator.tygr](examples/scripts/calculator.tygr): A simple calculator using recursive variants.
+
+To see examples of the module system, see [examples/crates](examples/crates).
 
 ## Documentation
 
