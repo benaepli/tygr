@@ -13,7 +13,7 @@ use crate::analysis::resolver::{
 use crate::builtin::{
     BOOL_TYPE, FLOAT_TYPE, INT_TYPE, LIST_TYPE, STRING_TYPE, UNIT_TYPE, builtin_kinds,
 };
-use crate::ir::closure::{ConstructorDef, VariantDef};
+use crate::ir::direct::closure::{ConstructorDef, VariantDef};
 use crate::parser::Span;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -564,11 +564,25 @@ impl Inferrer {
     }
 
     fn instantiate(&mut self, scheme: &TypeScheme) -> Rc<Type> {
+        let (ty, _) = self.instantiate_tracking(scheme);
+        ty
+    }
+
+    /// Returns the instantiated type and the fresh type variables used for the instantiation.
+    fn instantiate_tracking(&mut self, scheme: &TypeScheme) -> (Rc<Type>, Vec<Rc<Type>>) {
         let mut mapping = HashMap::new();
+        let mut fresh_vars = Vec::new();
+
         for (var, kind) in &scheme.vars {
-            mapping.insert(*var, Type::new(self.new_type(), kind.clone()));
+            let fresh = Type::new(self.new_type(), kind.clone());
+            fresh_vars.push(fresh.clone());
+            mapping.insert(*var, fresh);
         }
-        Self::instantiate_with_mapping(&scheme.ty, &mapping)
+
+        (
+            Self::instantiate_with_mapping(&scheme.ty, &mapping),
+            fresh_vars,
+        )
     }
 
     fn instantiate_with_mapping(ty: &Rc<Type>, mapping: &HashMap<TypeID, Rc<Type>>) -> Rc<Type> {
@@ -940,9 +954,12 @@ impl Inferrer {
                 let scheme = env
                     .get(&name)
                     .ok_or(TypeError::UnboundVariable(name, span))?;
-                let ty = self.instantiate(scheme);
+                let (ty, instantiation) = self.instantiate_tracking(scheme);
                 Ok(Typed {
-                    kind: TypedKind::Var(name),
+                    kind: TypedKind::Var {
+                        name,
+                        instantiation,
+                    },
                     ty,
                     span,
                 })
@@ -1208,10 +1225,13 @@ impl Inferrer {
 
             ResolvedKind::Builtin(builtin) => {
                 let scheme = builtin.type_scheme();
-                let ty = self.instantiate(&scheme);
+                let (ty, instantiation) = self.instantiate_tracking(&scheme);
 
                 Ok(Typed {
-                    kind: TypedKind::Builtin(builtin),
+                    kind: TypedKind::Builtin {
+                        fun: builtin,
+                        instantiation,
+                    },
                     ty,
                     span,
                 })
@@ -1223,13 +1243,14 @@ impl Inferrer {
                 let Some(ctor) = variant.schemes.get(&ctor_id).cloned() else {
                     return Err(TypeError::ConstructorNotFound(variant_id, ctor_id, span));
                 };
-                let ty = self.instantiate(&ctor);
+                let (ty, instantiation) = self.instantiate_tracking(&ctor);
                 let nullary = !matches!(&ty.ty, TypeKind::Function(_, _));
                 Ok(Typed {
                     kind: TypedKind::Constructor {
                         variant: variant_id,
                         ctor: ctor_id,
                         nullary,
+                        instantiation,
                     },
                     ty,
                     span,
@@ -1265,6 +1286,15 @@ impl Inferrer {
                     let typed_pattern = self.infer_pattern(pattern, &mut new_env)?;
 
                     self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
+                    let final_value_ty = self.apply_subst(&typed_value.ty);
+                    let value_scheme = if is_value {
+                        self.generalize(&env, &final_value_ty)
+                    } else {
+                        TypeScheme {
+                            vars: vec![],
+                            ty: final_value_ty.clone(),
+                        }
+                    };
 
                     let mut bindings = Vec::new();
                     for (name, scheme) in new_env {
@@ -1284,6 +1314,7 @@ impl Inferrer {
                         pattern: typed_pattern,
                         value: Box::new(typed_value),
                         bindings,
+                        scheme: value_scheme,
                         ty: value_ty,
                         span: stmt_span,
                     });
@@ -1338,6 +1369,16 @@ impl Inferrer {
 
         self.unify(&value_ty, &typed_pattern.ty, typed_value.span)?;
 
+        let final_value_ty = self.apply_subst(&typed_value.ty);
+        let value_scheme = if is_value {
+            self.generalize(env, &final_value_ty)
+        } else {
+            TypeScheme {
+                vars: vec![],
+                ty: final_value_ty.clone(),
+            }
+        };
+
         let mut bindings = Vec::new();
         for (name, scheme) in new_pattern_bindings {
             let s = if is_value {
@@ -1356,6 +1397,7 @@ impl Inferrer {
             pattern: typed_pattern,
             value: Box::new(typed_value),
             bindings,
+            scheme: value_scheme,
             ty: value_ty,
             span,
         };
@@ -1532,6 +1574,13 @@ impl Inferrer {
     fn resolve_types_in_expr(&self, expr: &mut Typed) {
         expr.ty = self.apply_subst(&expr.ty);
         match &mut expr.kind {
+            TypedKind::Var { instantiation, .. }
+            | TypedKind::Constructor { instantiation, .. }
+            | TypedKind::Builtin { instantiation, .. } => {
+                for arg in instantiation {
+                    *arg = self.apply_subst(arg);
+                }
+            }
             TypedKind::Lambda { param, body, .. } => {
                 self.resolve_types_in_pattern(param);
                 self.resolve_types_in_expr(body);

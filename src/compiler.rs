@@ -6,7 +6,7 @@ use crate::analysis::format::{
 use crate::analysis::inference::{Environment, Inferrer, TypedGroup, TypedStatement};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{GlobalName, GlobalType, Name, Resolver, TypeName};
-use crate::ir::closure::{Converter, Program, VariantDef};
+use crate::ir::direct::closure::{Converter, Program, VariantDef};
 use crate::lexer::Lexer;
 use crate::parser::{
     Declaration, Definition, ReplStatement, SourceId, Statement, TypeAlias, Variant, parse_program,
@@ -309,9 +309,9 @@ pub fn compile_constructor_program(
     input: &str,
     name: &str,
     writer: &mut impl WriteStyle,
-) -> Result<(crate::ir::constructor::Program, NameTable), anyhow::Error> {
+) -> Result<(crate::ir::direct::constructor::Program, NameTable), anyhow::Error> {
     let (closure_program, name_table) = compile_closure_program(input, name, writer)?;
-    let mut converter = crate::ir::constructor::Converter::new(closure_program.next_name);
+    let mut converter = crate::ir::direct::constructor::Converter::new(closure_program.next_name);
     let constructor_program = converter.convert_program(closure_program);
     Ok((constructor_program, name_table))
 }

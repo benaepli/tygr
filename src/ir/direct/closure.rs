@@ -363,7 +363,9 @@ impl Converter {
                 kind: ExprKind::EmptyListLit,
                 ty,
             },
-            TypedKind::Var(global_name) => {
+            TypedKind::Var {
+                name: global_name, ..
+            } => {
                 let kind = match scope.get(&global_name) {
                     Some(VarSource::Local(n, _)) => ExprKind::Local(*n),
                     Some(VarSource::Env { field, .. }) => ExprKind::EnvAccess { field: *field },
@@ -557,7 +559,7 @@ impl Converter {
                 ),
                 ty,
             },
-            TypedKind::Builtin(b) => Expr {
+            TypedKind::Builtin { fun: b, .. } => Expr {
                 kind: ExprKind::Builtin(b),
                 ty,
             },
@@ -565,6 +567,7 @@ impl Converter {
                 variant,
                 ctor,
                 nullary,
+                ..
             } => Expr {
                 kind: ExprKind::Constructor {
                     variant,

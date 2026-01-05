@@ -643,7 +643,7 @@ fn apply(
 
 fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> EvalResult {
     match &expr.kind {
-        TypedKind::Var(name) => env.get(name).ok_or(EvalError::UndefinedVariable(*name)),
+        TypedKind::Var { name, .. } => env.get(name).ok_or(EvalError::UndefinedVariable(*name)),
         TypedKind::IntLit(i) => Ok(Rc::new(Value::Int(*i))),
         TypedKind::FloatLit(f) => Ok(Rc::new(Value::Float(*f))),
         TypedKind::BoolLit(b) => Ok(Rc::new(Value::Bool(*b))),
@@ -696,7 +696,7 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
             let right = eval(rhs, env, custom_fns)?;
             eval_binop(op.clone(), left, right)
         }
-        TypedKind::Builtin(b) => Ok(Rc::new(Value::Builtin(b.clone()))),
+        TypedKind::Builtin { fun: b, .. } => Ok(Rc::new(Value::Builtin(b.clone()))),
         TypedKind::EmptyListLit => Ok(Rc::new(Value::List(vec![]))),
         TypedKind::Cons(e1, e2) => {
             let v1 = eval(e1, env, custom_fns)?;
@@ -740,6 +740,7 @@ fn eval(expr: &Typed, env: &mut Environment, custom_fns: &CustomFnRegistry) -> E
             variant,
             ctor,
             nullary,
+            ..
         } => {
             if *nullary {
                 Ok(Rc::new(Value::Variant(

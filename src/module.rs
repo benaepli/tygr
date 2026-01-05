@@ -15,7 +15,7 @@ use crate::analysis::inference::{Environment, Inferrer, TypeError, TypedCrate};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{CrateId, GlobalName, GlobalType, ResolutionError, Resolver};
 use crate::driver::{self, LoadError};
-use crate::ir::closure;
+use crate::ir::direct::closure;
 use crate::manifest::{Manifest, ManifestError};
 use crate::sources::FileSources;
 
@@ -192,10 +192,11 @@ impl CrateCompiler {
     pub fn compile_to_constructor_ir(
         &mut self,
         path: &Path,
-    ) -> Result<crate::ir::constructor::Program, CompileError> {
+    ) -> Result<crate::ir::direct::constructor::Program, CompileError> {
         let closure_program = self.compile_to_closure_ir(path)?;
 
-        let mut converter = crate::ir::constructor::Converter::new(closure_program.next_name);
+        let mut converter =
+            crate::ir::direct::constructor::Converter::new(closure_program.next_name);
         let constructor_program = converter.convert_program(closure_program);
 
         Ok(constructor_program)

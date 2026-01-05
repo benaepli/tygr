@@ -1,59 +1,35 @@
-use crate::analysis::inference::{Kind, Type, TypeID, TypeKind};
-use crate::analysis::resolver::{GlobalName, GlobalType};
-use crate::builtin::BuiltinFn;
-use crate::ir::closure::{
-    Cluster as ClosureCluster, Definition as ClosureDef, Expr as ClosureExpr,
-    ExprKind as ClosureExprKind, Pattern as ClosurePattern, PatternKind as ClosurePatternKind,
-    Program as ClosureProgram, Stmt as ClosureStmt,
+use crate::analysis::inference::{
+    Type, TypeKind, TypeScheme, Typed, TypedCrate, TypedDefinition, TypedGroup, TypedKind,
+    TypedPattern, TypedPatternKind,
 };
+use crate::analysis::resolver::{CrateId, GlobalName};
+use crate::builtin::BuiltinFn;
+use crate::ir::direct::closure::VariantDef;
+use crate::ir::tags::TagMap;
 use crate::parser::BinOp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-pub struct Program {
-    pub clusters: Vec<Cluster>,
-    pub structs: Vec<StructDef>,
-    pub functions: Vec<FuncDef>,
-    pub globals: Vec<GlobalDef>,
+pub struct Crate {
+    pub crate_id: CrateId,
+    pub groups: Vec<Cluster>,
+    pub variants: Vec<VariantDef>,
+    pub next_name: GlobalName,
 }
 
 #[derive(Debug, Clone)]
 pub enum Cluster {
-    Recursive(Vec<Definition>),
-    NonRecursive(Definition),
+    Recursive(Vec<Def>),
+    NonRecursive(Def),
 }
 
 #[derive(Debug, Clone)]
-pub enum Definition {
-    Struct(StructDef),
-    Function(FuncDef),
-    Global(GlobalDef),
-}
-
-#[derive(Debug, Clone)]
-pub struct StructDef {
-    pub name: GlobalType,
-    pub type_params: Vec<TypeID>,
-    pub fields: Vec<(GlobalName, Rc<Type>)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FuncDef {
+pub struct Def {
     pub name: GlobalName,
-    pub type_params: Vec<TypeID>,
-    pub param: GlobalName,
-    pub env_param: GlobalName,
-    pub env_struct: GlobalType,
-    pub body: Expr,
-    pub ret_ty: Rc<Type>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GlobalDef {
-    pub name: GlobalName,
+    pub expr: Expr,
     pub ty: Rc<Type>,
-    pub val: Expr,
+    pub scheme: TypeScheme,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +42,8 @@ pub struct Expr {
 pub struct Stmt {
     pub pattern: Pattern,
     pub value: Box<Expr>,
+    pub bindings: Vec<(GlobalName, TypeScheme)>,
+    pub scheme: TypeScheme,
 }
 
 #[derive(Debug, Clone)]
@@ -97,20 +75,16 @@ pub enum PatternKind {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    Local(GlobalName),
-    Global(GlobalName),
-    EnvAccess {
-        field: GlobalName,
+    Var {
+        name: GlobalName,
+        instantiation: Vec<Rc<Type>>,
     },
-    MakeClosure {
-        fn_ref: GlobalName,
-        env_struct: GlobalType,
-        captures: Vec<(GlobalName, Expr)>,
+    Lambda {
+        param: GlobalName,
+        body: Box<Expr>,
+        captures: HashSet<GlobalName>,
     },
-    CallClosure {
-        closure: Box<Expr>,
-        arg: Box<Expr>,
-    },
+    App(Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Match(Box<Expr>, Vec<MatchBranch>),
     Block(Vec<Stmt>, Option<Box<Expr>>),
@@ -127,318 +101,289 @@ pub enum ExprKind {
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     RecRecord(BTreeMap<String, (GlobalName, Expr)>),
     FieldAccess(Box<Expr>, String),
-    Builtin(BuiltinFn),
-
+    Builtin {
+        fun: BuiltinFn,
+        instantiation: Vec<Rc<Type>>,
+    },
     Pack {
         tag: u32,
         payload: Option<Box<Expr>>,
+        instantiation: Vec<Rc<Type>>,
     },
 }
 
-struct TagMap {
-    mapping: BTreeMap<(GlobalType, GlobalName), u32>,
-}
-
-impl TagMap {
-    fn new() -> Self {
-        Self {
-            mapping: BTreeMap::new(),
-        }
-    }
-
-    fn insert(&mut self, type_name: GlobalType, ctor_name: GlobalName, tag: u32) {
-        self.mapping.insert((type_name, ctor_name), tag);
-    }
-
-    fn get(&self, type_name: GlobalType, ctor_name: GlobalName) -> u32 {
-        *self
-            .mapping
-            .get(&(type_name, ctor_name))
-            .expect("Constructor tag not found")
-    }
-}
-
-pub struct Converter {
+struct Converter {
     tag_map: TagMap,
-    generated_funcs: Vec<FuncDef>,
-
-    // Mapping from constructor name to the name of the generated helper function
-    ctor_helpers: HashMap<(GlobalType, GlobalName), GlobalName>,
-    name_counter: GlobalName,
+    current_name: GlobalName,
 }
 
 impl Converter {
-    pub fn new(base_name: GlobalName) -> Self {
-        Self {
-            tag_map: TagMap::new(),
-            generated_funcs: Vec::new(),
-            ctor_helpers: HashMap::new(),
-            name_counter: base_name,
-        }
-    }
-
-    fn next_name(&mut self) -> GlobalName {
-        let n = self.name_counter;
-        self.name_counter.name.0 += 1;
-        n
-    }
-
-    pub fn convert_program(&mut self, prog: ClosureProgram) -> Program {
-        let mut new_clusters = Vec::new();
-        for variant in &prog.variants {
+    pub fn new(variants: &[VariantDef], base_id: GlobalName) -> Self {
+        let mut tag_map = TagMap::new();
+        for variant in variants {
             for (index, ctor) in variant.constructors.iter().enumerate() {
-                let tag = index as u32;
-                self.tag_map.insert(variant.name, ctor.name, tag);
-
-                if let Some(payload_ty) = &ctor.payload {
-                    let helper_name = self.next_name();
-                    self.ctor_helpers
-                        .insert((variant.name, ctor.name), helper_name);
-
-                    let param_name = self.next_name();
-                    let env_param_name = self.next_name();
-
-                    let mut ret_ty = Rc::new(Type {
-                        ty: TypeKind::Con(variant.name),
-                        kind: Rc::new(Kind::Star),
-                    });
-
-                    for param_id in &variant.type_params {
-                        let param_ty = Rc::new(Type {
-                            ty: TypeKind::Var(*param_id),
-                            kind: Rc::new(Kind::Star),
-                        });
-                        ret_ty = Rc::new(Type {
-                            ty: TypeKind::App(ret_ty, param_ty),
-                            kind: Rc::new(Kind::Star),
-                        });
-                    }
-
-                    let body_expr = Expr {
-                        kind: ExprKind::Pack {
-                            tag,
-                            payload: Some(Box::new(Expr {
-                                kind: ExprKind::Local(param_name),
-                                ty: payload_ty.clone(),
-                            })),
-                        },
-                        ty: ret_ty.clone(),
-                    };
-
-                    let func_def = FuncDef {
-                        name: helper_name,
-                        type_params: variant.type_params.clone(),
-                        param: param_name,
-                        env_param: env_param_name,
-                        env_struct: variant.name,
-                        body: body_expr,
-                        ret_ty,
-                    };
-
-                    self.generated_funcs.push(func_def);
-                    for func in self.generated_funcs.drain(..) {
-                        new_clusters.push(Cluster::NonRecursive(Definition::Function(func)));
-                    }
-                }
+                tag_map.insert(variant.name, ctor.name, index as u32);
             }
         }
-
-        for cluster in prog.clusters {
-            match cluster {
-                ClosureCluster::NonRecursive(def) => {
-                    let new_def = self.convert_definition(def);
-                    new_clusters.push(Cluster::NonRecursive(new_def));
-                }
-                ClosureCluster::Recursive(defs) => {
-                    let new_defs = defs
-                        .into_iter()
-                        .map(|d| self.convert_definition(d))
-                        .collect();
-                    new_clusters.push(Cluster::Recursive(new_defs));
-                }
-            }
-        }
-
-        Program {
-            clusters: new_clusters,
-            structs: Vec::new(),
-            functions: Vec::new(),
-            globals: Vec::new(),
+        Self {
+            tag_map,
+            current_name: base_id,
         }
     }
 
-    fn convert_definition(&mut self, def: ClosureDef) -> Definition {
-        match def {
-            ClosureDef::Struct(s) => Definition::Struct(StructDef {
-                name: s.name,
-                type_params: s.type_params,
-                fields: s.fields,
-            }),
-            ClosureDef::Function(f) => Definition::Function(FuncDef {
-                name: f.name,
-                type_params: f.type_params,
-                param: f.param,
-                env_param: f.env_param,
-                env_struct: f.env_struct,
-                body: self.convert_expr(f.body),
-                ret_ty: f.ret_ty,
-            }),
-            ClosureDef::Global(g) => Definition::Global(GlobalDef {
-                name: g.name,
-                ty: g.ty,
-                val: self.convert_expr(g.val),
-            }),
+    fn new_name(&mut self) -> GlobalName {
+        let id = self.current_name;
+        self.current_name.name.0 += 1;
+        id
+    }
+
+    pub fn convert_crate(&mut self, typed: TypedCrate) -> Crate {
+        let groups = typed
+            .groups
+            .into_iter()
+            .map(|g| self.convert_group(g))
+            .collect();
+        Crate {
+            crate_id: typed.crate_id,
+            groups,
+            variants: typed.variants,
+            next_name: self.current_name,
         }
     }
 
-    fn convert_stmt(&mut self, stmt: ClosureStmt) -> Stmt {
-        Stmt {
-            pattern: self.convert_pattern(stmt.pattern),
-            value: Box::new(self.convert_expr(*stmt.value)),
+    fn convert_group(&mut self, group: TypedGroup) -> Cluster {
+        match group {
+            TypedGroup::NonRecursive(def) => Cluster::NonRecursive(self.convert_def(def)),
+            TypedGroup::Recursive(defs) => {
+                Cluster::Recursive(defs.into_iter().map(|d| self.convert_def(d)).collect())
+            }
         }
     }
 
-    fn convert_pattern(&mut self, pat: ClosurePattern) -> Pattern {
-        let kind = match pat.kind {
-            ClosurePatternKind::Var(n) => PatternKind::Var(n),
-            ClosurePatternKind::Unit => PatternKind::Unit,
-            ClosurePatternKind::Wildcard => PatternKind::Wildcard,
-            ClosurePatternKind::EmptyList => PatternKind::EmptyList,
-            ClosurePatternKind::Pair(p1, p2) => PatternKind::Pair(
-                Box::new(self.convert_pattern(*p1)),
-                Box::new(self.convert_pattern(*p2)),
-            ),
-            ClosurePatternKind::Cons(p1, p2) => PatternKind::Cons(
-                Box::new(self.convert_pattern(*p1)),
-                Box::new(self.convert_pattern(*p2)),
-            ),
-            ClosurePatternKind::Record(fields) => {
-                let new_fields = fields
-                    .into_iter()
-                    .map(|(k, v)| (k, self.convert_pattern(v)))
-                    .collect();
-                PatternKind::Record(new_fields)
-            }
-            ClosurePatternKind::Constructor(type_name, ctor_name, sub_pat) => {
-                let tag = self.tag_map.get(type_name, ctor_name);
-                PatternKind::Tagged {
-                    tag,
-                    payload: sub_pat.map(|p| Box::new(self.convert_pattern(*p))),
-                }
-            }
-        };
-        Pattern { kind, ty: pat.ty }
+    fn convert_def(&mut self, def: TypedDefinition) -> Def {
+        Def {
+            name: def.name.0,
+            expr: self.convert_expr(*def.expr),
+            ty: def.ty,
+            scheme: def.scheme,
+        }
     }
 
-    fn convert_expr(&mut self, expr: ClosureExpr) -> Expr {
-        let new_kind = match expr.kind {
-            ClosureExprKind::Local(n) => ExprKind::Local(n),
-            ClosureExprKind::Global(n) => ExprKind::Global(n),
-            ClosureExprKind::EnvAccess { field } => ExprKind::EnvAccess { field },
-            ClosureExprKind::UnitLit => ExprKind::UnitLit,
-            ClosureExprKind::IntLit(i) => ExprKind::IntLit(i),
-            ClosureExprKind::FloatLit(f) => ExprKind::FloatLit(f),
-            ClosureExprKind::BoolLit(b) => ExprKind::BoolLit(b),
-            ClosureExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ClosureExprKind::EmptyListLit => ExprKind::EmptyListLit,
-
-            ClosureExprKind::Constructor {
-                variant,
-                ctor,
-                nullary,
+    pub fn convert_expr(&mut self, typed: Typed) -> Expr {
+        let kind = match typed.kind {
+            TypedKind::Var {
+                name,
+                instantiation,
+            } => ExprKind::Var {
+                name,
+                instantiation,
+            },
+            TypedKind::Lambda {
+                param,
+                body,
+                captures,
             } => {
-                let tag = self.tag_map.get(variant, ctor);
-                if nullary {
-                    ExprKind::Pack { tag, payload: None }
+                if let TypedPatternKind::Var { name } = param.kind {
+                    ExprKind::Lambda {
+                        param: name,
+                        body: Box::new(self.convert_expr(*body)),
+                        captures,
+                    }
                 } else {
-                    let helper = self
-                        .ctor_helpers
-                        .get(&(variant, ctor))
-                        .expect("Helper should exist for non-nullary ctor");
-                    ExprKind::Global(*helper)
+                    let param_name = self.new_name();
+                    let body_ty = body.ty.clone();
+                    let pattern = self.convert_pattern(param);
+                    let body = self.convert_expr(*body);
+                    ExprKind::Lambda {
+                        param: param_name,
+                        body: Box::new(Expr {
+                            kind: ExprKind::Match(
+                                Box::new(Expr {
+                                    kind: ExprKind::Var {
+                                        name: param_name,
+                                        instantiation: vec![],
+                                    },
+                                    ty: pattern.ty.clone(),
+                                }),
+                                vec![MatchBranch {
+                                    pattern,
+                                    body: Box::new(body),
+                                }],
+                            ),
+                            ty: body_ty,
+                        }),
+                        captures,
+                    }
                 }
             }
-
-            ClosureExprKind::Match(target, branches) => {
+            TypedKind::App(fun, arg) => {
+                if let TypedKind::Constructor {
+                    variant,
+                    ctor,
+                    instantiation,
+                    ..
+                } = fun.kind
+                {
+                    // Optimization: App(Ctor, Arg) -> Pack { tag, payload: Some(Arg) }
+                    let tag = self.tag_map.get(variant, ctor);
+                    ExprKind::Pack {
+                        tag,
+                        payload: Some(Box::new(self.convert_expr(*arg))),
+                        instantiation,
+                    }
+                } else {
+                    ExprKind::App(
+                        Box::new(self.convert_expr(*fun)),
+                        Box::new(self.convert_expr(*arg)),
+                    )
+                }
+            }
+            TypedKind::If(cond, then, els) => ExprKind::If(
+                Box::new(self.convert_expr(*cond)),
+                Box::new(self.convert_expr(*then)),
+                Box::new(self.convert_expr(*els)),
+            ),
+            TypedKind::Match(scrutinee, branches) => {
                 let new_branches = branches
                     .into_iter()
                     .map(|b| MatchBranch {
                         pattern: self.convert_pattern(b.pattern),
-                        body: Box::new(self.convert_expr(*b.body)),
+                        body: Box::new(self.convert_expr(*b.expr)),
                     })
                     .collect();
-                ExprKind::Match(Box::new(self.convert_expr(*target)), new_branches)
+                ExprKind::Match(Box::new(self.convert_expr(*scrutinee)), new_branches)
             }
-
-            ClosureExprKind::Block(stmts, tail) => {
-                let new_stmts = stmts.into_iter().map(|s| self.convert_stmt(s)).collect();
-                let new_tail = tail.map(|t| Box::new(self.convert_expr(*t)));
-                ExprKind::Block(new_stmts, new_tail)
-            }
-
-            ClosureExprKind::MakeClosure {
-                fn_ref,
-                env_struct,
-                captures,
-            } => {
-                let new_captures = captures
+            TypedKind::Block(stmts, expr) => {
+                let stmts = stmts
                     .into_iter()
-                    .map(|(n, e)| (n, self.convert_expr(e)))
+                    .map(|s| Stmt {
+                        pattern: self.convert_pattern(s.pattern),
+                        value: Box::new(self.convert_expr(*s.value)),
+                        bindings: s.bindings,
+                        scheme: s.scheme,
+                    })
                     .collect();
-                ExprKind::MakeClosure {
-                    fn_ref,
-                    env_struct,
-                    captures: new_captures,
-                }
+                let expr = expr.map(|e| Box::new(self.convert_expr(*e)));
+                ExprKind::Block(stmts, expr)
             }
-
-            ClosureExprKind::CallClosure { closure, arg } => ExprKind::CallClosure {
-                closure: Box::new(self.convert_expr(*closure)),
-                arg: Box::new(self.convert_expr(*arg)),
-            },
-
-            ClosureExprKind::If(c, t, e) => ExprKind::If(
-                Box::new(self.convert_expr(*c)),
-                Box::new(self.convert_expr(*t)),
-                Box::new(self.convert_expr(*e)),
+            TypedKind::Cons(head, tail) => ExprKind::Cons(
+                Box::new(self.convert_expr(*head)),
+                Box::new(self.convert_expr(*tail)),
             ),
 
-            ClosureExprKind::PairLit(a, b) => ExprKind::PairLit(
+            TypedKind::UnitLit => ExprKind::UnitLit,
+            TypedKind::PairLit(a, b) => ExprKind::PairLit(
                 Box::new(self.convert_expr(*a)),
                 Box::new(self.convert_expr(*b)),
             ),
-            ClosureExprKind::Cons(h, t) => ExprKind::Cons(
-                Box::new(self.convert_expr(*h)),
-                Box::new(self.convert_expr(*t)),
-            ),
-            ClosureExprKind::BinOp(op, l, r) => ExprKind::BinOp(
+            TypedKind::IntLit(n) => ExprKind::IntLit(n),
+            TypedKind::FloatLit(n) => ExprKind::FloatLit(n),
+            TypedKind::BoolLit(b) => ExprKind::BoolLit(b),
+            TypedKind::StringLit(s) => ExprKind::StringLit(s),
+            TypedKind::EmptyListLit => ExprKind::EmptyListLit,
+            TypedKind::RecordLit(fields) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(name, e)| (name, self.convert_expr(e)))
+                    .collect();
+                ExprKind::RecordLit(fields)
+            }
+
+            TypedKind::BinOp(op, lhs, rhs) => ExprKind::BinOp(
                 op,
-                Box::new(self.convert_expr(*l)),
-                Box::new(self.convert_expr(*r)),
+                Box::new(self.convert_expr(*lhs)),
+                Box::new(self.convert_expr(*rhs)),
             ),
-            ClosureExprKind::RecordLit(fields) => {
-                let new_fields = fields
+            TypedKind::RecRecord(fields) => {
+                let fields = fields
                     .into_iter()
-                    .map(|(k, v)| (k, self.convert_expr(v)))
+                    .map(|(name, (gn, e))| (name, (gn, self.convert_expr(e))))
                     .collect();
-                ExprKind::RecordLit(new_fields)
+                ExprKind::RecRecord(fields)
             }
-            ClosureExprKind::RecRecord(fields) => {
-                let new_fields = fields
-                    .into_iter()
-                    .map(|(k, (n, v))| (k, (n, self.convert_expr(v))))
-                    .collect();
-                ExprKind::RecRecord(new_fields)
+            TypedKind::FieldAccess(expr, field) => {
+                ExprKind::FieldAccess(Box::new(self.convert_expr(*expr)), field)
             }
-            ClosureExprKind::FieldAccess(e, f) => {
-                ExprKind::FieldAccess(Box::new(self.convert_expr(*e)), f)
+
+            TypedKind::Builtin { fun, instantiation } => ExprKind::Builtin { fun, instantiation },
+            TypedKind::Constructor {
+                variant,
+                ctor,
+                nullary,
+                instantiation,
+            } => {
+                let tag = self.tag_map.get(variant, ctor);
+                if nullary {
+                    ExprKind::Pack {
+                        tag,
+                        payload: None,
+                        instantiation,
+                    }
+                } else {
+                    let (arg_ty, ret_ty) = match &typed.ty.as_ref().ty {
+                        TypeKind::Function(arg, ret) => (arg.clone(), ret.clone()),
+                        _ => panic!("Non-nullary constructor must have a function type!"),
+                    };
+
+                    let param_name = self.new_name();
+
+                    ExprKind::Lambda {
+                        param: param_name,
+                        captures: HashSet::new(),
+                        body: Box::new(Expr {
+                            kind: ExprKind::Pack {
+                                tag,
+                                payload: Some(Box::new(Expr {
+                                    kind: ExprKind::Var {
+                                        name: param_name,
+                                        instantiation: vec![],
+                                    },
+                                    ty: arg_ty,
+                                })),
+                                instantiation,
+                            },
+                            ty: ret_ty,
+                        }),
+                    }
+                }
             }
-            ClosureExprKind::Builtin(b) => ExprKind::Builtin(b),
         };
 
-        Expr {
-            kind: new_kind,
-            ty: expr.ty,
-        }
+        Expr { kind, ty: typed.ty }
     }
+
+    fn convert_pattern(&mut self, pat: TypedPattern) -> Pattern {
+        let kind = match pat.kind {
+            TypedPatternKind::Var { name } => PatternKind::Var(name),
+            TypedPatternKind::Unit => PatternKind::Unit,
+            TypedPatternKind::Pair(a, b) => PatternKind::Pair(
+                Box::new(self.convert_pattern(*a)),
+                Box::new(self.convert_pattern(*b)),
+            ),
+            TypedPatternKind::Wildcard => PatternKind::Wildcard,
+            TypedPatternKind::Cons(head, tail) => PatternKind::Cons(
+                Box::new(self.convert_pattern(*head)),
+                Box::new(self.convert_pattern(*tail)),
+            ),
+            TypedPatternKind::EmptyList => PatternKind::EmptyList,
+            TypedPatternKind::Record(fields) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(name, p)| (name, self.convert_pattern(p)))
+                    .collect();
+                PatternKind::Record(fields)
+            }
+            TypedPatternKind::Constructor(v, c, sub) => PatternKind::Tagged {
+                tag: self.tag_map.get(v, c),
+                payload: sub.map(|p| Box::new(self.convert_pattern(*p))),
+            },
+        };
+        Pattern { kind, ty: pat.ty }
+    }
+}
+
+/// Convert a TypedCrate to constructor IR.
+pub fn convert(typed: TypedCrate, base_id: GlobalName) -> Crate {
+    let mut converter = Converter::new(&typed.variants, base_id);
+    converter.convert_crate(typed)
 }

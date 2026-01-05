@@ -1,6 +1,6 @@
 use crate::analysis::inference::{Type, TypeDisplay, TypeID};
 use crate::analysis::name_table::NameTable;
-use crate::ir::closure::{
+use crate::ir::direct::closure::{
     Cluster, Definition, Expr, ExprKind, FuncDef, GlobalDef, MatchBranch, Pattern, PatternKind,
     Program, Stmt, StructDef,
 };

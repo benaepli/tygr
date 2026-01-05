@@ -1,7 +1,7 @@
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{CrateId, GlobalName, GlobalType, TypeName};
 use crate::builtin::BuiltinFn;
-use crate::ir::closure::VariantDef;
+use crate::ir::direct::closure::VariantDef;
 use crate::parser::{BinOp, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -179,6 +179,7 @@ pub struct TypedStatement {
     pub pattern: TypedPattern,
     pub value: Box<Typed>,
     pub ty: Rc<Type>,
+    pub scheme: TypeScheme,
     pub bindings: Vec<(GlobalName, TypeScheme)>, // Maps names bound in the pattern to a scheme
     pub span: Span,
 }
@@ -192,7 +193,11 @@ pub struct Typed {
 
 #[derive(Debug, Clone)]
 pub enum TypedKind {
-    Var(GlobalName),
+    Var {
+        name: GlobalName,
+        /// The concrete types applied to the generic parameters of the variable's scheme.
+        instantiation: Vec<Rc<Type>>,
+    },
     Lambda {
         param: TypedPattern,
         body: Box<Typed>,
@@ -217,11 +222,15 @@ pub enum TypedKind {
     RecRecord(BTreeMap<String, (GlobalName, Typed)>),
     FieldAccess(Box<Typed>, String),
 
-    Builtin(BuiltinFn),
+    Builtin {
+        fun: BuiltinFn,
+        instantiation: Vec<Rc<Type>>,
+    },
     Constructor {
         variant: GlobalType,
         ctor: GlobalName,
         nullary: bool,
+        instantiation: Vec<Rc<Type>>,
     },
 }
 

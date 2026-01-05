@@ -45,6 +45,15 @@ impl<'a> TypedAstVisualizer<'a> {
         let _ = writeln!(self.output, "{}{}", self.indent_str(), s);
     }
 
+    fn format_instantiation(&self, instantiation: &[std::rc::Rc<Type>]) -> String {
+        if instantiation.is_empty() {
+            String::new()
+        } else {
+            let types: Vec<String> = instantiation.iter().map(|t| self.type_str(t)).collect();
+            format!("[{}]", types.join(", "))
+        }
+    }
+
     pub fn visualize_expr(&mut self, expr: &Typed) -> String {
         self.output.clear();
         self.visit_expr(expr);
@@ -92,8 +101,8 @@ impl<'a> TypedAstVisualizer<'a> {
     }
 
     fn visit_statement(&mut self, stmt: &TypedStatement) {
-        let ty_str = self.type_str(&stmt.ty);
-        self.write_line(&format!("Statement : {}", ty_str));
+        let scheme_str = self.scheme_str(&stmt.scheme);
+        self.write_line(&format!("Statement : {}", scheme_str));
         self.indent += 1;
         self.write_line("pattern:");
         self.indent += 1;
@@ -182,9 +191,13 @@ impl<'a> TypedAstVisualizer<'a> {
     fn visit_expr(&mut self, expr: &Typed) {
         let ty_str = self.type_str(&expr.ty);
         match &expr.kind {
-            TypedKind::Var(name) => {
+            TypedKind::Var {
+                name,
+                instantiation,
+            } => {
                 let name_str = self.name_table.lookup_name(name);
-                self.write_line(&format!("Var({}) : {}", name_str, ty_str));
+                let inst_str = self.format_instantiation(instantiation);
+                self.write_line(&format!("Var({}){} : {}", name_str, inst_str, ty_str));
             }
             TypedKind::Lambda {
                 param,
@@ -359,20 +372,26 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.visit_expr(record);
                 self.indent -= 1;
             }
-            TypedKind::Builtin(builtin) => {
-                self.write_line(&format!("Builtin({:?}) : {}", builtin, ty_str));
+            TypedKind::Builtin {
+                fun: builtin,
+                instantiation,
+            } => {
+                let inst_str = self.format_instantiation(instantiation);
+                self.write_line(&format!("Builtin({:?}){} : {}", builtin, inst_str, ty_str));
             }
             TypedKind::Constructor {
                 variant,
                 ctor,
                 nullary,
+                instantiation,
             } => {
                 let type_str = self.name_table.lookup_type_name(variant);
                 let ctor_str = self.name_table.lookup_name(ctor);
                 let nullary_str = if *nullary { " (nullary)" } else { "" };
+                let inst_str = self.format_instantiation(instantiation);
                 self.write_line(&format!(
-                    "Constructor {}::{}{} : {}",
-                    type_str, ctor_str, nullary_str, ty_str
+                    "Constructor {}::{}{}{} : {}",
+                    type_str, ctor_str, nullary_str, inst_str, ty_str
                 ));
             }
         }

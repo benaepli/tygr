@@ -85,14 +85,14 @@ impl UnboundVarChecker {
                 }
             }
             TypedKind::FieldAccess(expr, _) => self.check_expr(expr),
-            TypedKind::Var(_)
+            TypedKind::Var { .. }
             | TypedKind::IntLit(_)
             | TypedKind::FloatLit(_)
             | TypedKind::BoolLit(_)
             | TypedKind::StringLit(_)
             | TypedKind::UnitLit
             | TypedKind::EmptyListLit
-            | TypedKind::Builtin(_)
+            | TypedKind::Builtin { .. }
             | TypedKind::Constructor { .. } => {}
         }
     }
