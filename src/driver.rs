@@ -6,8 +6,9 @@ use crate::sources::FileSources;
 use bimap::BiMap;
 use chumsky::error::Rich;
 use std::collections::HashMap;
+use std::path::Path;
 use thiserror::Error;
-use vfs::VfsPath;
+use vfs::{MemoryFS, VfsPath};
 
 const FILE_EXTENSION: &str = ".tygr";
 const RECURSION_LIMIT: usize = 256;
@@ -311,6 +312,96 @@ pub fn load_module(
     Ok(Crate {
         modules: state.modules,
         root_module: id,
+        module_paths: state.paths,
+    })
+}
+
+/// Load a crate from source code directly (single-file, no submodules).
+pub fn load_from_source(
+    source: String,
+    file_name: &str,
+    sources: &mut FileSources,
+) -> Result<Crate, LoadError> {
+    let mut state = LoadState::default();
+    let source_id = state.new_source_id();
+
+    let mem_fs = MemoryFS::new();
+    let vfs_root = VfsPath::new(mem_fs);
+
+    let pure_file_name = Path::new(file_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(file_name);
+
+    let file_path = vfs_root.join(pure_file_name).map_err(|e| LoadError::VfsError {
+        file_path: vfs_root.clone(),
+        error: e,
+        module_span: None,
+    })?;
+
+    file_path
+        .create_file()
+        .map_err(|e| LoadError::VfsError {
+            file_path: file_path.clone(),
+            error: e,
+            module_span: None,
+        })?
+        .write_all(source.as_bytes())
+        .map_err(|e| LoadError::IoError {
+            file_path: file_path.clone(),
+            error: e,
+            module_span: None,
+        })?;
+
+    sources.add(source_id, file_path.as_str(), source.clone());
+
+    let mut lexer = lexer::Lexer::new(&source, source_id);
+    let (tokens, lex_errors) = lexer.collect_all();
+    if !lex_errors.is_empty() {
+        return Err(LoadError::LexErrors {
+            file_path,
+            errors: lex_errors,
+            module_span: None,
+        });
+    }
+
+    // Parse
+    let parsed = parser::parse_program(&tokens);
+    if parsed.has_errors() {
+        let errors = parsed.errors().map(|e| e.clone().into_owned()).collect();
+        return Err(LoadError::ParseErrors {
+            file_path,
+            errors,
+            module_span: None,
+        });
+    }
+
+    let ast = parsed
+        .into_output()
+        .expect("parse result should have output if no errors");
+
+    // Build single-module crate (no submodule declarations allowed)
+    let root_id = state.new_id();
+    let entry = state.dfs_counter;
+    state.dfs_counter += 1;
+    let exit = state.dfs_counter;
+    state.dfs_counter += 1;
+
+    let data = ModuleData {
+        id: root_id,
+        parent: None,
+        ast,
+        file_path,
+        scope: DfsScope { entry, exit },
+        source_id,
+    };
+
+    state.modules.insert(root_id, data);
+    state.paths.insert(vec![], root_id);
+
+    Ok(Crate {
+        modules: state.modules,
+        root_module: root_id,
         module_paths: state.paths,
     })
 }

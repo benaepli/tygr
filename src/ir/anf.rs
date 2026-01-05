@@ -1,5 +1,6 @@
-use crate::analysis::inference::{Type, TypeID};
+use crate::analysis::inference::{Type, TypeScheme};
 use crate::analysis::resolver::GlobalName;
+use crate::builtin::BuiltinFn;
 use crate::parser::BinOp;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -14,14 +15,14 @@ pub enum Decl {
     },
     PolyVal {
         name: GlobalName,
-        tyvars: Vec<TypeID>,
+        scheme: TypeScheme,
         ty: Rc<Type>,
-        expr: Box<XmlExpr>,
+        expr: Box<Expr>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub struct XmlExpr {
+pub struct Expr {
     pub decs: Vec<Decl>,
     pub result: Atom, // The return value of the block
     pub ty: Rc<Type>,
@@ -43,9 +44,9 @@ pub enum Atom {
 }
 
 #[derive(Debug, Clone)]
-pub struct XmlSwitchBranch {
+pub struct SwitchBranch {
     pub tag: u32,
-    pub body: XmlExpr,
+    pub body: Expr,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +64,8 @@ pub enum PrimExpr {
     Lambda {
         param: GlobalName,
         param_ty: Rc<Type>,
-        body: Box<XmlExpr>,
+        body: Box<Expr>,
+        captures: Vec<GlobalName>,
     },
     Pack {
         tag: u32,
@@ -73,7 +75,22 @@ pub enum PrimExpr {
     BinOp(BinOp, Atom, Atom),
     Switch {
         scrutinee: Atom,
-        branches: Vec<XmlSwitchBranch>,
-        default: Option<Box<XmlExpr>>,
+        branches: Vec<SwitchBranch>,
+        default: Option<Box<Expr>>,
     },
+    If(Atom, Box<Expr>, Box<Expr>),
+    Cons {
+        head: Atom,
+        tail: Atom,
+    },
+    RecRecord(BTreeMap<String, (GlobalName, Atom)>),
+    FieldAccess(Atom, String),
+    Fst(Atom),
+    Snd(Atom),
+    Builtin {
+        fun: BuiltinFn,
+        instantiation: Vec<Rc<Type>>,
+    },
+    UnpackTag(Atom),
+    UnpackPayload(Atom),
 }

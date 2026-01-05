@@ -1,17 +1,19 @@
-use crate::analysis::inference::{
-    Type, TypeDisplay, TypeScheme, Typed, TypedCrate, TypedDefinition, TypedGroup, TypedKind,
-    TypedMatchPattern, TypedPattern, TypedPatternKind, TypedStatement,
-};
+use crate::analysis::inference::{Type, TypeDisplay, TypeID};
 use crate::analysis::name_table::NameTable;
+use crate::ir::direct::constructor::{
+    Cluster, Definition, Expr, ExprKind, FuncDef, GlobalDef, MatchBranch, Pattern, PatternKind,
+    Program, Stmt, StructDef,
+};
 use std::fmt::Write;
+use std::rc::Rc;
 
-pub struct TypedAstVisualizer<'a> {
+pub struct ConstructorIrVisualizer<'a> {
     name_table: &'a NameTable,
     indent: usize,
     output: String,
 }
 
-impl<'a> TypedAstVisualizer<'a> {
+impl<'a> ConstructorIrVisualizer<'a> {
     pub fn new(name_table: &'a NameTable) -> Self {
         Self {
             name_table,
@@ -24,20 +26,16 @@ impl<'a> TypedAstVisualizer<'a> {
         "  ".repeat(self.indent)
     }
 
-    fn type_str(&self, ty: &std::rc::Rc<Type>) -> String {
+    fn type_str(&self, ty: &Rc<Type>) -> String {
         TypeDisplay::new(ty.clone(), self.name_table).to_string()
     }
 
-    fn scheme_str(&self, scheme: &TypeScheme) -> String {
-        if scheme.vars.is_empty() {
-            self.type_str(&scheme.ty)
+    fn type_params_str(&self, params: &[TypeID]) -> String {
+        if params.is_empty() {
+            String::new()
         } else {
-            let vars: Vec<String> = scheme
-                .vars
-                .iter()
-                .map(|(id, _)| format!("{}", id))
-                .collect();
-            format!("forall {}. {}", vars.join(" "), self.type_str(&scheme.ty))
+            let vars: Vec<String> = params.iter().map(|id| format!("{}", id)).collect();
+            format!("[{}]", vars.join(", "))
         }
     }
 
@@ -45,53 +43,29 @@ impl<'a> TypedAstVisualizer<'a> {
         let _ = writeln!(self.output, "{}{}", self.indent_str(), s);
     }
 
-    fn format_instantiation(&self, instantiation: &[std::rc::Rc<Type>]) -> String {
-        if instantiation.is_empty() {
-            String::new()
-        } else {
-            let types: Vec<String> = instantiation.iter().map(|t| self.type_str(t)).collect();
-            format!("[{}]", types.join(", "))
-        }
-    }
-
-    pub fn visualize_expr(&mut self, expr: &Typed) -> String {
+    pub fn visualize_program(&mut self, program: &Program) -> String {
         self.output.clear();
-        self.visit_expr(expr);
-        self.output.clone()
-    }
-
-    pub fn visualize_statement(&mut self, stmt: &TypedStatement) -> String {
-        self.output.clear();
-        self.visit_statement(stmt);
-        self.output.clone()
-    }
-
-    pub fn visualize_group(&mut self, group: &TypedGroup) -> String {
-        self.output.clear();
-        self.visit_group(group);
-        self.output.clone()
-    }
-
-    pub fn visualize_crate(&mut self, c: &TypedCrate) -> String {
-        self.output.clear();
-        self.write_line(&format!("Crate (id: {})", c.crate_id.0));
+        self.write_line("Program:");
         self.indent += 1;
-        for group in &c.groups {
-            self.visit_group(group);
+        for (i, cluster) in program.clusters.iter().enumerate() {
+            self.write_line(&format!("cluster {}:", i));
+            self.indent += 1;
+            self.visit_cluster(cluster);
+            self.indent -= 1;
         }
         self.indent -= 1;
         self.output.clone()
     }
 
-    fn visit_group(&mut self, group: &TypedGroup) {
-        match group {
-            TypedGroup::NonRecursive(def) => {
+    fn visit_cluster(&mut self, cluster: &Cluster) {
+        match cluster {
+            Cluster::NonRecursive(def) => {
                 self.write_line("NonRecursive:");
                 self.indent += 1;
                 self.visit_definition(def);
                 self.indent -= 1;
             }
-            TypedGroup::Recursive(defs) => {
+            Cluster::Recursive(defs) => {
                 self.write_line("Recursive:");
                 self.indent += 1;
                 for def in defs {
@@ -102,61 +76,76 @@ impl<'a> TypedAstVisualizer<'a> {
         }
     }
 
-    fn visit_definition(&mut self, def: &TypedDefinition) {
-        let scheme_str = self.scheme_str(&def.scheme);
-        let name_str = self.name_table.lookup_name(&def.name.0);
-        self.write_line(&format!("Definition '{}' : {}", name_str, scheme_str));
-        self.indent += 1;
-        self.visit_expr(&def.expr);
-        self.indent -= 1;
-    }
-
-    fn visit_statement(&mut self, stmt: &TypedStatement) {
-        let scheme_str = self.scheme_str(&stmt.scheme);
-        self.write_line(&format!("Statement : {}", scheme_str));
-        self.indent += 1;
-        self.write_line("pattern:");
-        self.indent += 1;
-        self.visit_pattern(&stmt.pattern);
-        self.indent -= 1;
-        if !stmt.bindings.is_empty() {
-            self.write_line("bindings:");
-            self.indent += 1;
-            for (name, scheme) in &stmt.bindings {
-                let name_str = self.name_table.lookup_name(name);
-                let scheme_str = self.scheme_str(scheme);
-                self.write_line(&format!("{} : {}", name_str, scheme_str));
-            }
-            self.indent -= 1;
+    fn visit_definition(&mut self, def: &Definition) {
+        match def {
+            Definition::Struct(s) => self.visit_struct_def(s),
+            Definition::Function(f) => self.visit_func_def(f),
+            Definition::Global(g) => self.visit_global_def(g),
         }
-        self.write_line("value:");
+    }
+
+    fn visit_struct_def(&mut self, def: &StructDef) {
+        let name = self.name_table.lookup_type_name(&def.name);
+        let type_params = self.type_params_str(&def.type_params);
+        self.write_line(&format!("Struct '{}'{}", name, type_params));
         self.indent += 1;
-        self.visit_expr(&stmt.value);
+        for (field_name, field_ty) in &def.fields {
+            let field_name_str = self.name_table.lookup_name(field_name);
+            let ty_str = self.type_str(field_ty);
+            self.write_line(&format!("{} : {}", field_name_str, ty_str));
+        }
+        self.indent -= 1;
+    }
+
+    fn visit_func_def(&mut self, def: &FuncDef) {
+        let name = self.name_table.lookup_name(&def.name);
+        let type_params = self.type_params_str(&def.type_params);
+        let param = self.name_table.lookup_name(&def.param);
+        let env_param = self.name_table.lookup_name(&def.env_param);
+        let env_struct = self.name_table.lookup_type_name(&def.env_struct);
+        let ret_ty = self.type_str(&def.ret_ty);
+        self.write_line(&format!(
+            "Function '{}'{} (param: {}, env: {} : {}) -> {}",
+            name, type_params, param, env_param, env_struct, ret_ty
+        ));
+        self.indent += 1;
+        self.write_line("body:");
+        self.indent += 1;
+        self.visit_expr(&def.body);
         self.indent -= 1;
         self.indent -= 1;
     }
 
-    fn visit_pattern(&mut self, pat: &TypedPattern) {
+    fn visit_global_def(&mut self, def: &GlobalDef) {
+        let name = self.name_table.lookup_name(&def.name);
+        let ty_str = self.type_str(&def.ty);
+        self.write_line(&format!("Global '{}' : {}", name, ty_str));
+        self.indent += 1;
+        self.visit_expr(&def.val);
+        self.indent -= 1;
+    }
+
+    fn visit_pattern(&mut self, pat: &Pattern) {
         let ty_str = self.type_str(&pat.ty);
         match &pat.kind {
-            TypedPatternKind::Var { name } => {
+            PatternKind::Var(name) => {
                 let name_str = self.name_table.lookup_name(name);
                 self.write_line(&format!("Var({}) : {}", name_str, ty_str));
             }
-            TypedPatternKind::Unit => {
+            PatternKind::Unit => {
                 self.write_line(&format!("Unit : {}", ty_str));
             }
-            TypedPatternKind::Pair(p1, p2) => {
+            PatternKind::Pair(p1, p2) => {
                 self.write_line(&format!("Pair : {}", ty_str));
                 self.indent += 1;
                 self.visit_pattern(p1);
                 self.visit_pattern(p2);
                 self.indent -= 1;
             }
-            TypedPatternKind::Wildcard => {
+            PatternKind::Wildcard => {
                 self.write_line(&format!("Wildcard : {}", ty_str));
             }
-            TypedPatternKind::Cons(head, tail) => {
+            PatternKind::Cons(head, tail) => {
                 self.write_line(&format!("Cons : {}", ty_str));
                 self.indent += 1;
                 self.write_line("head:");
@@ -169,10 +158,10 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.indent -= 1;
                 self.indent -= 1;
             }
-            TypedPatternKind::EmptyList => {
+            PatternKind::EmptyList => {
                 self.write_line(&format!("EmptyList : {}", ty_str));
             }
-            TypedPatternKind::Record(fields) => {
+            PatternKind::Record(fields) => {
                 self.write_line(&format!("Record : {}", ty_str));
                 self.indent += 1;
                 for (name, field_pat) in fields {
@@ -183,14 +172,9 @@ impl<'a> TypedAstVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            TypedPatternKind::Constructor(type_name, ctor_name, inner) => {
-                let type_str = self.name_table.lookup_type_name(type_name);
-                let ctor_str = self.name_table.lookup_name(ctor_name);
-                self.write_line(&format!(
-                    "Constructor {}::{} : {}",
-                    type_str, ctor_str, ty_str
-                ));
-                if let Some(inner) = inner {
+            PatternKind::Tagged { tag, payload } => {
+                self.write_line(&format!("Tagged(tag: {}) : {}", tag, ty_str));
+                if let Some(inner) = payload {
                     self.indent += 1;
                     self.visit_pattern(inner);
                     self.indent -= 1;
@@ -199,48 +183,67 @@ impl<'a> TypedAstVisualizer<'a> {
         }
     }
 
-    fn visit_expr(&mut self, expr: &Typed) {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        self.write_line("Stmt:");
+        self.indent += 1;
+        self.write_line("pattern:");
+        self.indent += 1;
+        self.visit_pattern(&stmt.pattern);
+        self.indent -= 1;
+        self.write_line("value:");
+        self.indent += 1;
+        self.visit_expr(&stmt.value);
+        self.indent -= 1;
+        self.indent -= 1;
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
         let ty_str = self.type_str(&expr.ty);
         match &expr.kind {
-            TypedKind::Var {
-                name,
-                instantiation,
-            } => {
+            ExprKind::Local(name) => {
                 let name_str = self.name_table.lookup_name(name);
-                let inst_str = self.format_instantiation(instantiation);
-                self.write_line(&format!("Var({}){} : {}", name_str, inst_str, ty_str));
+                self.write_line(&format!("Local({}) : {}", name_str, ty_str));
             }
-            TypedKind::Lambda {
-                param,
-                body,
+            ExprKind::Global(name) => {
+                let name_str = self.name_table.lookup_name(name);
+                self.write_line(&format!("Global({}) : {}", name_str, ty_str));
+            }
+            ExprKind::EnvAccess { field } => {
+                let field_str = self.name_table.lookup_name(field);
+                self.write_line(&format!("EnvAccess({}) : {}", field_str, ty_str));
+            }
+            ExprKind::MakeClosure {
+                fn_ref,
+                env_struct,
                 captures,
             } => {
-                let captures_str: Vec<_> = captures
-                    .iter()
-                    .map(|n| self.name_table.lookup_name(n))
-                    .collect();
+                let fn_name = self.name_table.lookup_name(fn_ref);
+                let env_name = self.name_table.lookup_type_name(env_struct);
                 self.write_line(&format!(
-                    "Lambda [captures: {}] : {}",
-                    captures_str.join(", "),
-                    ty_str
+                    "MakeClosure(fn: {}, env: {}) : {}",
+                    fn_name, env_name, ty_str
                 ));
-                self.indent += 1;
-                self.write_line("param:");
-                self.indent += 1;
-                self.visit_pattern(param);
-                self.indent -= 1;
-                self.write_line("body:");
-                self.indent += 1;
-                self.visit_expr(body);
-                self.indent -= 1;
-                self.indent -= 1;
+                if !captures.is_empty() {
+                    self.indent += 1;
+                    self.write_line("captures:");
+                    self.indent += 1;
+                    for (cap_name, cap_expr) in captures {
+                        let cap_name_str = self.name_table.lookup_name(cap_name);
+                        self.write_line(&format!("{}:", cap_name_str));
+                        self.indent += 1;
+                        self.visit_expr(cap_expr);
+                        self.indent -= 1;
+                    }
+                    self.indent -= 1;
+                    self.indent -= 1;
+                }
             }
-            TypedKind::App(func, arg) => {
-                self.write_line(&format!("App : {}", ty_str));
+            ExprKind::CallClosure { closure, arg } => {
+                self.write_line(&format!("CallClosure : {}", ty_str));
                 self.indent += 1;
-                self.write_line("func:");
+                self.write_line("closure:");
                 self.indent += 1;
-                self.visit_expr(func);
+                self.visit_expr(closure);
                 self.indent -= 1;
                 self.write_line("arg:");
                 self.indent += 1;
@@ -248,7 +251,7 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.indent -= 1;
                 self.indent -= 1;
             }
-            TypedKind::If(cond, then_branch, else_branch) => {
+            ExprKind::If(cond, then_branch, else_branch) => {
                 self.write_line(&format!("If : {}", ty_str));
                 self.indent += 1;
                 self.write_line("cond:");
@@ -265,7 +268,7 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.indent -= 1;
                 self.indent -= 1;
             }
-            TypedKind::Match(scrutinee, branches) => {
+            ExprKind::Match(scrutinee, branches) => {
                 self.write_line(&format!("Match : {}", ty_str));
                 self.indent += 1;
                 self.write_line("scrutinee:");
@@ -280,13 +283,13 @@ impl<'a> TypedAstVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            TypedKind::Block(stmts, result) => {
+            ExprKind::Block(stmts, result) => {
                 self.write_line(&format!("Block : {}", ty_str));
                 self.indent += 1;
                 for (i, stmt) in stmts.iter().enumerate() {
                     self.write_line(&format!("stmt {}:", i));
                     self.indent += 1;
-                    self.visit_statement(stmt);
+                    self.visit_stmt(stmt);
                     self.indent -= 1;
                 }
                 if let Some(result_expr) = result {
@@ -297,23 +300,10 @@ impl<'a> TypedAstVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            TypedKind::Cons(head, tail) => {
-                self.write_line(&format!("Cons : {}", ty_str));
-                self.indent += 1;
-                self.write_line("head:");
-                self.indent += 1;
-                self.visit_expr(head);
-                self.indent -= 1;
-                self.write_line("tail:");
-                self.indent += 1;
-                self.visit_expr(tail);
-                self.indent -= 1;
-                self.indent -= 1;
-            }
-            TypedKind::UnitLit => {
+            ExprKind::UnitLit => {
                 self.write_line(&format!("UnitLit : {}", ty_str));
             }
-            TypedKind::PairLit(first, second) => {
+            ExprKind::PairLit(first, second) => {
                 self.write_line(&format!("PairLit : {}", ty_str));
                 self.indent += 1;
                 self.write_line("first:");
@@ -326,22 +316,22 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.indent -= 1;
                 self.indent -= 1;
             }
-            TypedKind::IntLit(i) => {
+            ExprKind::IntLit(i) => {
                 self.write_line(&format!("IntLit({}) : {}", i, ty_str));
             }
-            TypedKind::FloatLit(f) => {
+            ExprKind::FloatLit(f) => {
                 self.write_line(&format!("FloatLit({}) : {}", f, ty_str));
             }
-            TypedKind::BoolLit(b) => {
+            ExprKind::BoolLit(b) => {
                 self.write_line(&format!("BoolLit({}) : {}", b, ty_str));
             }
-            TypedKind::StringLit(s) => {
+            ExprKind::StringLit(s) => {
                 self.write_line(&format!("StringLit({:?}) : {}", s, ty_str));
             }
-            TypedKind::EmptyListLit => {
+            ExprKind::EmptyListLit => {
                 self.write_line(&format!("EmptyListLit : {}", ty_str));
             }
-            TypedKind::RecordLit(fields) => {
+            ExprKind::RecordLit(fields) => {
                 self.write_line(&format!("RecordLit : {}", ty_str));
                 self.indent += 1;
                 for (name, field_expr) in fields {
@@ -352,7 +342,20 @@ impl<'a> TypedAstVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            TypedKind::BinOp(op, lhs, rhs) => {
+            ExprKind::Cons(head, tail) => {
+                self.write_line(&format!("Cons : {}", ty_str));
+                self.indent += 1;
+                self.write_line("head:");
+                self.indent += 1;
+                self.visit_expr(head);
+                self.indent -= 1;
+                self.write_line("tail:");
+                self.indent += 1;
+                self.visit_expr(tail);
+                self.indent -= 1;
+                self.indent -= 1;
+            }
+            ExprKind::BinOp(op, lhs, rhs) => {
                 self.write_line(&format!("BinOp({:?}) : {}", op, ty_str));
                 self.indent += 1;
                 self.write_line("lhs:");
@@ -365,7 +368,7 @@ impl<'a> TypedAstVisualizer<'a> {
                 self.indent -= 1;
                 self.indent -= 1;
             }
-            TypedKind::RecRecord(fields) => {
+            ExprKind::RecRecord(fields) => {
                 self.write_line(&format!("RecRecord : {}", ty_str));
                 self.indent += 1;
                 for (name, (name_id, field_expr)) in fields {
@@ -377,69 +380,45 @@ impl<'a> TypedAstVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            TypedKind::FieldAccess(record, field) => {
+            ExprKind::FieldAccess(record, field) => {
                 self.write_line(&format!("FieldAccess(.{}) : {}", field, ty_str));
                 self.indent += 1;
                 self.visit_expr(record);
                 self.indent -= 1;
             }
-            TypedKind::Builtin {
-                fun: builtin,
-                instantiation,
-            } => {
-                let inst_str = self.format_instantiation(instantiation);
-                self.write_line(&format!("Builtin({:?}){} : {}", builtin, inst_str, ty_str));
+            ExprKind::Builtin(builtin) => {
+                self.write_line(&format!("Builtin({:?}) : {}", builtin, ty_str));
             }
-            TypedKind::Constructor {
-                variant,
-                ctor,
-                nullary,
-                instantiation,
-            } => {
-                let type_str = self.name_table.lookup_type_name(variant);
-                let ctor_str = self.name_table.lookup_name(ctor);
-                let nullary_str = if *nullary { " (nullary)" } else { "" };
-                let inst_str = self.format_instantiation(instantiation);
-                self.write_line(&format!(
-                    "Constructor {}::{}{}{} : {}",
-                    type_str, ctor_str, nullary_str, inst_str, ty_str
-                ));
+            ExprKind::Pack { tag, payload } => {
+                self.write_line(&format!("Pack(tag: {}) : {}", tag, ty_str));
+                if let Some(inner) = payload {
+                    self.indent += 1;
+                    self.write_line("payload:");
+                    self.indent += 1;
+                    self.visit_expr(inner);
+                    self.indent -= 1;
+                    self.indent -= 1;
+                }
             }
         }
     }
 
-    fn visit_match_branch(&mut self, branch: &TypedMatchPattern) {
-        let ty_str = self.type_str(&branch.ty);
-        self.write_line(&format!("MatchBranch : {}", ty_str));
+    fn visit_match_branch(&mut self, branch: &MatchBranch) {
+        self.write_line("MatchBranch:");
         self.indent += 1;
         self.write_line("pattern:");
         self.indent += 1;
         self.visit_pattern(&branch.pattern);
         self.indent -= 1;
-        self.write_line("expr:");
+        self.write_line("body:");
         self.indent += 1;
-        self.visit_expr(&branch.expr);
+        self.visit_expr(&branch.body);
         self.indent -= 1;
         self.indent -= 1;
     }
 }
 
-pub fn visualize_typed_ast(expr: &Typed, name_table: &NameTable) -> String {
-    let mut visualizer = TypedAstVisualizer::new(name_table);
-    visualizer.visualize_expr(expr)
-}
-
-pub fn visualize_typed_statement(stmt: &TypedStatement, name_table: &NameTable) -> String {
-    let mut visualizer = TypedAstVisualizer::new(name_table);
-    visualizer.visualize_statement(stmt)
-}
-
-pub fn visualize_typed_group(group: &TypedGroup, name_table: &NameTable) -> String {
-    let mut visualizer = TypedAstVisualizer::new(name_table);
-    visualizer.visualize_group(group)
-}
-
-pub fn visualize_crate(c: &TypedCrate, name_table: &NameTable) -> String {
-    let mut visualizer = TypedAstVisualizer::new(name_table);
-    visualizer.visualize_crate(c)
+pub fn visualize_constructor_ir(program: &Program, name_table: &NameTable) -> String {
+    let mut visualizer = ConstructorIrVisualizer::new(name_table);
+    visualizer.visualize_program(program)
 }

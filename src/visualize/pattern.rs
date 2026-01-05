@@ -1,10 +1,9 @@
-//! AST Visualizer for the constructor IR.
+//! AST Visualizer for the pattern IR.
 
 use crate::analysis::inference::{Type, TypeDisplay, TypeScheme};
 use crate::analysis::name_table::NameTable;
-use crate::ir::constructor::{
-    Cluster, Crate, Def, Expr, ExprKind, MatchBranch, Pattern, PatternKind, Stmt,
-};
+use crate::ir::constructor::{Pattern, PatternKind};
+use crate::ir::pattern::{Cluster, Crate, Def, Expr, ExprKind, MatchBranch};
 use std::fmt::Write;
 use std::rc::Rc;
 
@@ -45,13 +44,13 @@ fn format_instantiation(instantiation: &[Rc<Type>], name_table: &NameTable) -> S
     }
 }
 
-pub struct ConstructorVisualizer<'a> {
+pub struct PatternVisualizer<'a> {
     name_table: &'a NameTable,
     indent: usize,
     output: String,
 }
 
-impl<'a> ConstructorVisualizer<'a> {
+impl<'a> PatternVisualizer<'a> {
     pub fn new(name_table: &'a NameTable) -> Self {
         Self {
             name_table,
@@ -121,6 +120,26 @@ impl<'a> ConstructorVisualizer<'a> {
     fn visit_expr(&mut self, e: &Expr) {
         let ty_s = type_str(&e.ty, self.name_table);
         match &e.kind {
+            ExprKind::Let {
+                name,
+                scheme,
+                val,
+                body,
+            } => {
+                let name_str = self.name_table.lookup_name(name);
+                let scheme_s = scheme_str(scheme, self.name_table);
+                self.write_line(&format!("Let {} : {}", name_str, scheme_s));
+                self.indent += 1;
+                self.write_line("val:");
+                self.indent += 1;
+                self.visit_expr(val);
+                self.indent -= 1;
+                self.write_line("body:");
+                self.indent += 1;
+                self.visit_expr(body);
+                self.indent -= 1;
+                self.indent -= 1;
+            }
             ExprKind::Var {
                 name,
                 instantiation,
@@ -197,23 +216,6 @@ impl<'a> ConstructorVisualizer<'a> {
                 }
                 self.indent -= 1;
             }
-            ExprKind::Block(stmts, final_expr) => {
-                self.write_line(&format!("Block : {}", ty_s));
-                self.indent += 1;
-                for (i, stmt) in stmts.iter().enumerate() {
-                    self.write_line(&format!("stmt {}:", i));
-                    self.indent += 1;
-                    self.visit_stmt(stmt);
-                    self.indent -= 1;
-                }
-                if let Some(expr) = final_expr {
-                    self.write_line("result:");
-                    self.indent += 1;
-                    self.visit_expr(expr);
-                    self.indent -= 1;
-                }
-                self.indent -= 1;
-            }
             ExprKind::UnitLit => {
                 self.write_line(&format!("UnitLit : {}", ty_s));
             }
@@ -248,10 +250,10 @@ impl<'a> ConstructorVisualizer<'a> {
             ExprKind::RecordLit(fields) => {
                 self.write_line(&format!("RecordLit : {}", ty_s));
                 self.indent += 1;
-                for (name, field_expr) in fields {
+                for (name, expr) in fields {
                     self.write_line(&format!("field '{}':", name));
                     self.indent += 1;
-                    self.visit_expr(field_expr);
+                    self.visit_expr(expr);
                     self.indent -= 1;
                 }
                 self.indent -= 1;
@@ -323,31 +325,6 @@ impl<'a> ConstructorVisualizer<'a> {
         }
     }
 
-    fn visit_stmt(&mut self, s: &Stmt) {
-        let scheme_s = scheme_str(&s.scheme, self.name_table);
-        self.write_line(&format!("Stmt : {}", scheme_s));
-        self.indent += 1;
-        self.write_line("pattern:");
-        self.indent += 1;
-        self.visit_pattern(&s.pattern);
-        self.indent -= 1;
-        if !s.bindings.is_empty() {
-            self.write_line("bindings:");
-            self.indent += 1;
-            for (name, sch) in &s.bindings {
-                let name_str = self.name_table.lookup_name(name);
-                let sch_s = scheme_str(sch, self.name_table);
-                self.write_line(&format!("{} : {}", name_str, sch_s));
-            }
-            self.indent -= 1;
-        }
-        self.write_line("value:");
-        self.indent += 1;
-        self.visit_expr(&s.value);
-        self.indent -= 1;
-        self.indent -= 1;
-    }
-
     fn visit_match_branch(&mut self, b: &MatchBranch) {
         self.write_line("MatchBranch:");
         self.indent += 1;
@@ -355,6 +332,10 @@ impl<'a> ConstructorVisualizer<'a> {
         self.indent += 1;
         self.visit_pattern(&b.pattern);
         self.indent -= 1;
+        if let Some(scheme) = &b.scrutinee_scheme {
+            let scheme_s = scheme_str(scheme, self.name_table);
+            self.write_line(&format!("scrutinee_scheme: {}", scheme_s));
+        }
         self.write_line("body:");
         self.indent += 1;
         self.visit_expr(&b.body);
@@ -362,7 +343,7 @@ impl<'a> ConstructorVisualizer<'a> {
         self.indent -= 1;
     }
 
-    pub fn visit_pattern(&mut self, p: &Pattern) {
+    fn visit_pattern(&mut self, p: &Pattern) {
         let ty_s = type_str(&p.ty, self.name_table);
         match &p.kind {
             PatternKind::Var(name) => {
@@ -427,16 +408,16 @@ impl<'a> ConstructorVisualizer<'a> {
 // Convenience functions
 
 pub fn visualize_crate(c: &Crate, name_table: &NameTable) -> String {
-    let mut v = ConstructorVisualizer::new(name_table);
+    let mut v = PatternVisualizer::new(name_table);
     v.visualize_crate(c)
 }
 
 pub fn visualize_expr(e: &Expr, name_table: &NameTable) -> String {
-    let mut v = ConstructorVisualizer::new(name_table);
+    let mut v = PatternVisualizer::new(name_table);
     v.visualize_expr(e)
 }
 
 pub fn visualize_cluster(c: &Cluster, name_table: &NameTable) -> String {
-    let mut v = ConstructorVisualizer::new(name_table);
+    let mut v = PatternVisualizer::new(name_table);
     v.visualize_cluster(c)
 }

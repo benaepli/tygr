@@ -15,7 +15,6 @@ use crate::analysis::inference::{Environment, Inferrer, TypeError, TypedCrate};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{CrateId, GlobalName, GlobalType, ResolutionError, Resolver};
 use crate::driver::{self, LoadError};
-use crate::ir::direct::closure;
 use crate::manifest::{Manifest, ManifestError};
 use crate::sources::FileSources;
 
@@ -113,93 +112,6 @@ impl CrateCompiler {
         let id = self.next_crate_id;
         self.next_crate_id = CrateId(self.next_crate_id.0 + 1);
         id
-    }
-
-    /// Compile a single crate from a root file path.
-    ///
-    /// The path should be the crate root (e.g., lib.tygr or main.tygr).
-    /// This function handles the full pipeline: loading, resolution, and type inference.
-    /// State is accumulated in the compiler for use across multiple crates.
-    pub fn compile_crate(&mut self, path: &Path) -> Result<TypedCrate, CompileError> {
-        // Convert path to VFS path
-        let root_path = path
-            .canonicalize()
-            .map_err(|e| CompileError::Path(format!("cannot canonicalize path: {}", e)))?;
-
-        let root_dir = root_path
-            .parent()
-            .ok_or_else(|| CompileError::Path("path has no parent directory".to_string()))?;
-
-        let fs = PhysicalFS::new(root_dir);
-        let vfs_root = VfsPath::new(fs);
-
-        let file_name = root_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| CompileError::Path("invalid file name".to_string()))?;
-
-        let vfs_file = vfs_root
-            .join(file_name)
-            .map_err(|e| CompileError::Path(format!("VFS error: {}", e)))?;
-
-        let krate = driver::load_module(&vfs_root, &vfs_file, &mut self.sources)?;
-        let crate_id = self.alloc_crate_id();
-
-        let extern_prelude = HashMap::new(); // Empty for now, will be populated for multi-crate
-        let resolve_ctx = self
-            .resolver
-            .resolve_crate(crate_id, krate, extern_prelude)?;
-
-        let prepared = self.resolver.prepare_crate(crate_id);
-
-        let local_table = resolve_ctx.into_local_name_table();
-        self.name_table.add(Some(crate_id), local_table);
-
-        let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
-
-        // Check for unbound type variables
-        let unbound_errors = UnboundVarChecker::new().check_crate(&typed_crate);
-        if let Some(error) = unbound_errors.into_iter().next() {
-            return Err(CompileError::UnboundTypeVar(error));
-        }
-
-        self.env = final_env;
-
-        Ok(typed_crate)
-    }
-
-    /// Compile a crate to closure IR.
-    ///
-    /// This runs the full pipeline from source to closure-converted IR,
-    /// ready for the constructor pass.
-    pub fn compile_to_closure_ir(&mut self, path: &Path) -> Result<closure::Program, CompileError> {
-        let typed = self.compile_crate(path)?;
-
-        let mut converter = closure::Converter::new(self.next_name(), self.next_type_name());
-
-        for var in typed.variants {
-            converter.register_variant(var);
-        }
-
-        let program = converter.convert_program(typed.groups);
-
-        Ok(program)
-    }
-
-    /// Compile a crate to constructor IR.
-    ///
-    /// This runs the full pipeline including the constructor pass.
-    pub fn compile_to_constructor_ir(
-        &mut self,
-        path: &Path,
-    ) -> Result<crate::ir::direct::constructor::Program, CompileError> {
-        let closure_program = self.compile_to_closure_ir(path)?;
-
-        let mut converter =
-            crate::ir::direct::constructor::Converter::new(closure_program.next_name);
-        let constructor_program = converter.convert_program(closure_program);
-
-        Ok(constructor_program)
     }
 
     /// Compile a project from its Tygr.toml manifest.
@@ -326,17 +238,15 @@ impl CrateCompiler {
             }
 
             // Compile this crate
-            let typed = self.compile_crate_with_prelude(&crate_root, extern_prelude)?;
+            let typed = self.compile_crate(&crate_root, extern_prelude)?;
             all_typed_crates.push(typed);
         }
 
         Ok(all_typed_crates)
     }
 
-    /// Compile a crate with an explicit extern_prelude.
-    ///
-    /// Similar to compile_crate but allows specifying dependencies.
-    fn compile_crate_with_prelude(
+    /// Compile a crate.
+    fn compile_crate(
         &mut self,
         path: &Path,
         extern_prelude: HashMap<String, CrateId>,
@@ -398,5 +308,44 @@ impl CrateCompiler {
         self.env = final_env;
 
         Ok(typed_crate)
+    }
+
+    /// Compile a single-file program from source code directly.
+    ///
+    /// This treats the source as a degenerate crate with no submodules.
+    pub fn compile_source(
+        &mut self,
+        source: String,
+        file_name: &str,
+        extern_prelude: HashMap<String, CrateId>,
+    ) -> Result<TypedCrate, CompileError> {
+        let krate = driver::load_from_source(source, file_name, &mut self.sources)?;
+        let crate_id = self.alloc_crate_id();
+
+        let resolve_ctx = self
+            .resolver
+            .resolve_crate(crate_id, krate, extern_prelude)?;
+
+        let prepared = self.resolver.prepare_crate(crate_id);
+
+        let local_table = resolve_ctx.into_local_name_table();
+        self.name_table.add(Some(crate_id), local_table);
+
+        let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
+
+        // Check for unbound type variables
+        let unbound_errors = UnboundVarChecker::new().check_crate(&typed_crate);
+        if let Some(error) = unbound_errors.into_iter().next() {
+            return Err(CompileError::UnboundTypeVar(error));
+        }
+
+        self.env = final_env;
+
+        Ok(typed_crate)
+    }
+
+    /// Compile a TypedCrate to a specific IR stage.
+    pub fn compile_to<S: crate::ir::stage::IrStage>(&self, typed: TypedCrate) -> S::Output {
+        S::convert(typed, self.next_name())
     }
 }

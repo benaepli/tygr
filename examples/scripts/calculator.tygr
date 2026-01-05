@@ -18,7 +18,7 @@ let rec eval e =
   | Div((l, r)) => (
         match (eval l, eval r) with
         | (Some(lv), Some(rv)) =>
-            if rv == 0 then None() else Some(lv / rv)
+            if rv == 0 then None else Some(lv / rv)
         | _ => None
   )
 

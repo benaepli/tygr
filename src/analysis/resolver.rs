@@ -1158,16 +1158,10 @@ impl Resolver {
                 Ok(ResolvedPattern::new(ResolvedPatternKind::EmptyList, span))
             }
             PatternKind::Constructor(name, pat) => {
-                let Some((variant_id, ctor_id)) = scope_ctx.global_constructors.get(&name).cloned()
-                else {
-                    return Err(ResolutionError::ConstructorNotFound(name, span));
-                };
-                let resolved = match pat {
-                    Some(p) => Some(Box::new(Self::analyze_pattern(ctx, scope_ctx, *p, scope)?)),
-                    None => None,
-                };
-                Ok(ResolvedPattern::new(
-                    ResolvedPatternKind::Constructor(
+                let (variant_type, ctor_name) = if let Some((variant_id, ctor_id)) =
+                    scope_ctx.global_constructors.get(&name).cloned()
+                {
+                    (
                         GlobalType {
                             krate: None,
                             name: variant_id,
@@ -1176,8 +1170,27 @@ impl Resolver {
                             krate: None,
                             name: ctor_id,
                         },
-                        resolved,
-                    ),
+                    )
+                } else if let (Some(c_id), Some(m_id)) = (ctx.crate_id, ctx.module_id) {
+                    let path = Path {
+                        base: None,
+                        segments: vec![name.clone()],
+                        span,
+                    };
+                    match scope_ctx.world.resolve(c_id, m_id, path, Namespace::Value) {
+                        Ok(Resolution::Constructor(gt, gn)) => (gt, gn),
+                        _ => return Err(ResolutionError::ConstructorNotFound(name, span)),
+                    }
+                } else {
+                    return Err(ResolutionError::ConstructorNotFound(name, span));
+                };
+
+                let resolved = match pat {
+                    Some(p) => Some(Box::new(Self::analyze_pattern(ctx, scope_ctx, *p, scope)?)),
+                    None => None,
+                };
+                Ok(ResolvedPattern::new(
+                    ResolvedPatternKind::Constructor(variant_type, ctor_name, resolved),
                     span,
                 ))
             }

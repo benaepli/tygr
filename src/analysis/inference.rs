@@ -1,5 +1,7 @@
 mod ast;
 pub mod unbound;
+#[cfg(test)]
+mod test;
 
 pub use ast::*;
 
@@ -454,47 +456,55 @@ impl Inferrer {
     pub fn register_variant(&mut self, variant: ResolvedVariant) -> Result<(), TypeError> {
         let mut params = Vec::new();
         let mut param_types = Vec::new();
-        for param_id in variant.type_params {
+        let mut param_kinds = Vec::new();
+
+        for param_id in &variant.type_params {
             let id = TypeID(self.next_var.0);
             self.next_var.0 += 1;
             let kind = self.new_kind();
-            let ty = Type::new(TypeKind::Var(id), kind);
-            param_types.push(ty.clone());
-            self.type_ctx.insert(param_id, ty);
+            let ty = Type::new(TypeKind::Var(id), kind.clone());
+            self.type_ctx.insert(*param_id, ty.clone());
             params.push(id);
-        }
-
-        let mut inferred_constructors = Vec::new();
-        for (name, ctor) in variant.constructors {
-            let ty = match &ctor.annotation {
-                Some(annot) => Some(self.instantiate_annotation(annot)?),
-                None => None,
-            };
-            inferred_constructors.push((name, ty));
+            param_types.push(ty);
+            param_kinds.push(kind);
         }
 
         let mut variant_kind = Rc::new(Kind::Star);
-        for p in param_types.iter().rev() {
-            let pk = self.apply_kind_subst(&p.kind);
-            variant_kind = Rc::new(Kind::Arrow(pk, variant_kind));
+        for pk in param_kinds.iter().rev() {
+            variant_kind = Rc::new(Kind::Arrow(pk.clone(), variant_kind));
         }
 
-        let variant_ty = Type::new(TypeKind::Con(variant.name), variant_kind);
+        let variant_con = Type::new(TypeKind::Con(variant.name), variant_kind.clone());
+        self.type_ctx.insert(variant.name, variant_con.clone());
+
+        let return_type = self.apply_wrap(variant_con.clone(), &param_types);
+
+        let mut definition_constructors = Vec::new();
+        let mut schemes = HashMap::new();
 
         let scheme_vars: Vec<(TypeID, Rc<Kind>)> = params
             .iter()
-            .zip(param_types.iter())
-            .map(|(id, ty)| (*id, self.apply_kind_subst(&ty.kind)))
+            .zip(param_kinds.iter())
+            .map(|(id, k)| (*id, k.clone()))
             .collect();
-        let mut schemes = HashMap::new();
 
-        for (name, arg_ty_opt) in inferred_constructors.clone() {
-            let ret_ty = self.apply_wrap(variant_ty.clone(), &param_types);
-
-            let ctor_ty = match arg_ty_opt {
-                Some(arg_ty) => Type::new(TypeKind::Function(arg_ty, ret_ty), Rc::new(Kind::Star)),
-                None => ret_ty,
+        for (name, ctor) in variant.constructors {
+            let payload_ty = if let Some(annot) = &ctor.annotation {
+                let ty = self.instantiate_annotation(annot)?;
+                self.unify_kinds(&ty.kind, &Rc::new(Kind::Star), ctor.span)?;
+                Some(ty)
+            } else {
+                None
             };
+
+            let ctor_ty = match &payload_ty {
+                Some(arg) => Type::new(
+                    TypeKind::Function(arg.clone(), return_type.clone()),
+                    Rc::new(Kind::Star),
+                ),
+                None => return_type.clone(),
+            };
+
             schemes.insert(
                 name,
                 TypeScheme {
@@ -502,23 +512,26 @@ impl Inferrer {
                     ty: ctor_ty,
                 },
             );
+
+            definition_constructors.push(ConstructorDef {
+                name,
+                payload: payload_ty,
+            });
         }
 
         let definition = VariantDef {
             name: variant.name,
-            type_params: params.clone(),
-            constructors: inferred_constructors
-                .into_iter()
-                .map(|(name, payload)| ConstructorDef { name, payload })
-                .collect(),
+            type_params: params,
+            constructors: definition_constructors,
         };
 
+        self.type_ctx.remove(&variant.name);
         self.variants.insert(
             variant.name,
             TypedVariant {
                 schemes,
-                ty: variant_ty,
-                definition, // Store it here
+                ty: variant_con,
+                definition,
             },
         );
         Ok(())
@@ -699,7 +712,7 @@ impl Inferrer {
         match &ty.ty {
             TypeKind::Var(id) => {
                 let mut map = HashMap::new();
-                map.insert(*id, ty.kind.clone());
+                map.insert(*id, self.apply_kind_subst(&ty.kind));
                 map
             }
             TypeKind::Pair(a, b) | TypeKind::Function(a, b) | TypeKind::App(a, b) => {
