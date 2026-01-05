@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use vfs::{PhysicalFS, VfsPath};
 
+use crate::analysis::inference::unbound::{UnboundTypeVarError, UnboundVarChecker};
 use crate::analysis::inference::{Environment, Inferrer, TypeError, TypedCrate};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::{CrateId, GlobalName, GlobalType, ResolutionError, Resolver};
@@ -29,6 +30,9 @@ pub enum CompileError {
 
     #[error("type inference failed: {0}")]
     Type(#[from] TypeError),
+
+    #[error("unbound type variable: {0}")]
+    UnboundTypeVar(#[from] UnboundTypeVarError),
 
     #[error("path error: {0}")]
     Path(String),
@@ -152,6 +156,13 @@ impl CrateCompiler {
         self.name_table.add(Some(crate_id), local_table);
 
         let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
+
+        // Check for unbound type variables
+        let unbound_errors = UnboundVarChecker::new().check_crate(&typed_crate);
+        if let Some(error) = unbound_errors.into_iter().next() {
+            return Err(CompileError::UnboundTypeVar(error));
+        }
+
         self.env = final_env;
 
         Ok(typed_crate)
@@ -376,6 +387,13 @@ impl CrateCompiler {
         self.name_table.add(Some(crate_id), local_table);
 
         let (typed_crate, final_env) = self.inferrer.infer_crate(prepared, self.env.clone())?;
+
+        // Check for unbound type variables
+        let unbound_errors = UnboundVarChecker::new().check_crate(&typed_crate);
+        if let Some(error) = unbound_errors.into_iter().next() {
+            return Err(CompileError::UnboundTypeVar(error));
+        }
+
         self.env = final_env;
 
         Ok(typed_crate)

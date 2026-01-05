@@ -1,4 +1,6 @@
-use crate::analysis::format::{report_resolution_errors, report_type_errors};
+use crate::analysis::format::{
+    report_resolution_errors, report_type_errors, report_unbound_type_var_errors,
+};
 use crate::lexer;
 use crate::module::{CompileError, CrateCompiler};
 use crate::parser;
@@ -42,6 +44,10 @@ pub fn report_compile_error(
                 name_table,
             )
             .map_err(to_io_error)?;
+        }
+        CompileError::UnboundTypeVar(error) => {
+            report_unbound_type_var_errors(writer, sources, std::slice::from_ref(error))
+                .map_err(to_io_error)?;
         }
         CompileError::Manifest(manifest_error) => {
             eprintln!("Manifest error: {}", manifest_error);

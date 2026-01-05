@@ -1,2 +1,4 @@
 pub def greet name: string = 
     "Hello, " ^ name ^ "!"
+
+pub def f x = greet x

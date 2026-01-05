@@ -2,11 +2,10 @@ use crate::analysis::inference::{
     Typed, TypedGroup, TypedKind, TypedPattern, TypedPatternKind, TypedStatement,
 };
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{GlobalName, GlobalType, Name, TypeName};
+use crate::analysis::resolver::{GlobalName, GlobalType};
 use crate::builtin::BuiltinFn;
 use crate::custom::{CustomFnId, CustomFnRegistry};
 use crate::parser::BinOp;
-use js_sys::WebAssembly::Global;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;

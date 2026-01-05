@@ -98,7 +98,7 @@ cargo run -- visualize constructor examples/programs/bst.tygr
 
 Tygr supports a crate-based project system similar to Rust's. A project is defined by a `Tygr.toml` manifest file.
 
-### Manifest (`Tygr.toml`)
+### Manifest
 
 ```toml
 [project]

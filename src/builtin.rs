@@ -1,5 +1,5 @@
 use crate::analysis::inference::{Kind, Type, TypeKind, TypeScheme};
-use crate::analysis::resolver::{GlobalName, GlobalType, TypeName};
+use crate::analysis::resolver::{GlobalType, TypeName};
 use phf::Map;
 use phf_macros::phf_map;
 use std::rc::Rc;

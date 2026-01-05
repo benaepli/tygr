@@ -2,7 +2,6 @@ use crate::analysis::resolver::ResolutionError;
 use crate::builtin::BuiltinFn;
 use crate::driver::{DfsScope, ModuleId};
 use crate::parser::{BinOp, Definition, Path, PathBase, Span, TypeAlias, Variant, Visibility};
-use js_sys::WebAssembly::Global;
 use petgraph::graph::DiGraph;
 use petgraph::prelude::NodeIndex;
 use std::collections::{HashMap, HashSet};
@@ -393,7 +392,7 @@ impl World {
                         if let Some((c, info, vis)) = mod_data.definitions.get(segment_name) {
                             self.check_visibility(
                                 vis,
-                                *c,
+                                current_crate,
                                 current_module,
                                 start_crate,
                                 start_module,
@@ -425,7 +424,7 @@ impl World {
                         if let Some((c, info, vis)) = mod_data.types.get(segment_name) {
                             self.check_visibility(
                                 vis,
-                                *c,
+                                current_crate,
                                 current_module,
                                 start_crate,
                                 start_module,

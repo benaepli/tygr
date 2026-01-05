@@ -1030,6 +1030,10 @@ impl Resolver {
 
         // Second pass: definition
         self.resolve_imports(&mut resolved)?;
+        self.scope_ctx
+            .world
+            .crates
+            .insert(resolved.crate_id, resolved.clone());
         let ctx = self.resolve_bodies(&mut resolved)?;
 
         self.scope_ctx.world.crates.insert(id, resolved);

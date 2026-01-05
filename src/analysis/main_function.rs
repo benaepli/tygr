@@ -1,6 +1,6 @@
 use crate::analysis::inference::{TypeDisplay, TypeKind, TypedGroup};
 use crate::analysis::name_table::NameTable;
-use crate::analysis::resolver::{GlobalName, Name};
+use crate::analysis::resolver::GlobalName;
 use std::rc::Rc;
 
 #[derive(Debug, thiserror::Error)]

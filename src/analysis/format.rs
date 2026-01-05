@@ -1,10 +1,10 @@
 use crate::analysis::InitialAnalysisError;
+use crate::analysis::inference::unbound::UnboundTypeVarError;
 use crate::analysis::inference::{TypeDisplay, TypeError};
 use crate::analysis::name_table::NameTable;
 use crate::analysis::resolver::ResolutionError;
 use crate::sources::FileSources;
 use chumsky::span::Span;
-use chumsky::span::Span as _;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term;
 use codespan_reporting::term::WriteStyle;
@@ -277,6 +277,33 @@ pub fn report_initial_analysis_errors(
                     "expressions involving function application, conditionals, or pattern matching are not allowed".to_string(),
                 ]),
         };
+
+        term::emit_to_write_style(writer, &config, files, &diagnostic)?;
+    }
+
+    Ok(())
+}
+
+pub fn report_unbound_type_var_errors(
+    writer: &mut impl WriteStyle,
+    files: &FileSources,
+    errors: &[UnboundTypeVarError],
+) -> Result<(), codespan_reporting::files::Error> {
+    let config = term::Config::default();
+
+    for error in errors {
+        let diagnostic = Diagnostic::error()
+            .with_message("unbound type variable")
+            .with_labels(vec![
+                Label::primary(error.span.context(), error.span.start..error.span.end)
+                    .with_message(format!(
+                        "type variable `'{}` is not bound in this type scheme",
+                        error.unbound_var.0
+                    )),
+            ])
+            .with_notes(vec![
+                "all unbound type variables must be annotated".to_string(),
+            ]);
 
         term::emit_to_write_style(writer, &config, files, &diagnostic)?;
     }

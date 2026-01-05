@@ -1,2 +1,4 @@
-def main() = 
-    print (mylib::greet "Tygr")
+use mylib::f as f
+
+def main() =
+   f (print (mylib::greet "Tygr"))
