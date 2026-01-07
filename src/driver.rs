@@ -333,11 +333,13 @@ pub fn load_from_source(
         .and_then(|n| n.to_str())
         .unwrap_or(file_name);
 
-    let file_path = vfs_root.join(pure_file_name).map_err(|e| LoadError::VfsError {
-        file_path: vfs_root.clone(),
-        error: e,
-        module_span: None,
-    })?;
+    let file_path = vfs_root
+        .join(pure_file_name)
+        .map_err(|e| LoadError::VfsError {
+            file_path: vfs_root.clone(),
+            error: e,
+            module_span: None,
+        })?;
 
     file_path
         .create_file()

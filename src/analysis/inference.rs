@@ -1,7 +1,7 @@
 mod ast;
-pub mod unbound;
 #[cfg(test)]
 mod test;
+pub mod unbound;
 
 pub use ast::*;
 

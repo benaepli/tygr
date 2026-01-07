@@ -1369,3 +1369,444 @@ fn test_multiple_bindings_in_block() {
         panic!("expected pair type");
     }
 }
+
+// Variant registration tests
+
+fn make_variant(
+    name: GlobalType,
+    type_params: Vec<GlobalType>,
+    constructors: Vec<(GlobalName, Option<ResolvedAnnotation>)>,
+) -> ResolvedVariant {
+    let ctors: HashMap<GlobalName, ResolvedConstructor> = constructors
+        .into_iter()
+        .map(|(n, ann)| {
+            (
+                n,
+                ResolvedConstructor {
+                    name: n,
+                    annotation: ann,
+                    span: span(),
+                },
+            )
+        })
+        .collect();
+    ResolvedVariant {
+        name,
+        type_params,
+        constructors: ctors,
+        span: span(),
+    }
+}
+
+#[test]
+fn test_register_variant_nullary() {
+    let mut inf = Inferrer::new();
+    let variant = make_variant(global_type(100), vec![], vec![(global_name(0), None)]);
+    assert!(inf.register_variant(variant).is_ok());
+    let defs = inf.get_variant_definitions();
+    assert_eq!(defs.len(), 1);
+}
+
+#[test]
+fn test_register_variant_with_payload() {
+    let mut inf = Inferrer::new();
+    let payload = annotation_var(GlobalType {
+        krate: None,
+        name: INT_TYPE,
+    });
+    let variant = make_variant(
+        global_type(100),
+        vec![],
+        vec![(global_name(0), Some(payload))],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+}
+
+#[test]
+fn test_register_variant_multiple_constructors() {
+    let mut inf = Inferrer::new();
+    let payload = annotation_var(GlobalType {
+        krate: None,
+        name: INT_TYPE,
+    });
+    let variant = make_variant(
+        global_type(100),
+        vec![],
+        vec![
+            (global_name(0), None),
+            (global_name(1), Some(payload)),
+            (global_name(2), None),
+        ],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+}
+
+#[test]
+fn test_register_parameterized_variant() {
+    let mut inf = Inferrer::new();
+    let type_param = global_type(200);
+    let payload = annotation_var(type_param);
+    let variant = make_variant(
+        global_type(100),
+        vec![type_param],
+        vec![(global_name(0), Some(payload))],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+}
+
+#[test]
+fn test_register_variant_two_params() {
+    let mut inf = Inferrer::new();
+    let param_a = global_type(200);
+    let param_b = global_type(201);
+    let payload_a = annotation_var(param_a);
+    let payload_b = annotation_var(param_b);
+    let pair_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(Box::new(payload_a), Box::new(payload_b)),
+        span(),
+    );
+    let variant = make_variant(
+        global_type(100),
+        vec![param_a, param_b],
+        vec![(global_name(0), None), (global_name(1), Some(pair_payload))],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+}
+
+#[test]
+fn test_variant_constructor_scheme_nullary() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let ctor_name = global_name(0);
+    let variant = make_variant(variant_type, vec![], vec![(ctor_name, None)]);
+    inf.register_variant(variant).unwrap();
+    let typed_variant = inf.variants.get(&variant_type).unwrap();
+    let scheme = typed_variant.schemes.get(&ctor_name).unwrap();
+    assert!(scheme.vars.is_empty());
+    if let TypeKind::Con(gt) = &scheme.ty.ty {
+        assert_eq!(*gt, variant_type);
+    } else {
+        panic!("expected constructor type");
+    }
+}
+
+#[test]
+fn test_variant_constructor_scheme_with_payload() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let ctor_name = global_name(0);
+    let payload = annotation_var(GlobalType {
+        krate: None,
+        name: INT_TYPE,
+    });
+    let variant = make_variant(variant_type, vec![], vec![(ctor_name, Some(payload))]);
+    inf.register_variant(variant).unwrap();
+    let typed_variant = inf.variants.get(&variant_type).unwrap();
+    let scheme = typed_variant.schemes.get(&ctor_name).unwrap();
+    if let TypeKind::Function(arg, ret) = &scheme.ty.ty {
+        if let TypeKind::Con(gt) = &arg.ty {
+            assert_eq!(gt.name, INT_TYPE);
+        } else {
+            panic!("expected int arg type");
+        }
+        if let TypeKind::Con(gt) = &ret.ty {
+            assert_eq!(*gt, variant_type);
+        } else {
+            panic!("expected variant return type");
+        }
+    } else {
+        panic!("expected function type");
+    }
+}
+
+#[test]
+fn test_variant_parameterized_scheme() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let type_param = global_type(200);
+    let ctor_name = global_name(0);
+    let payload = annotation_var(type_param);
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(ctor_name, Some(payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let typed_variant = inf.variants.get(&variant_type).unwrap();
+    let scheme = typed_variant.schemes.get(&ctor_name).unwrap();
+    assert_eq!(scheme.vars.len(), 1);
+    assert!(matches!(scheme.ty.ty, TypeKind::Function(_, _)));
+}
+
+#[test]
+fn test_infer_nullary_constructor() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let ctor_name = global_name(0);
+    let variant = make_variant(variant_type, vec![], vec![(ctor_name, None)]);
+    inf.register_variant(variant).unwrap();
+    let expr = Resolved::new(ResolvedKind::Constructor(variant_type, ctor_name), span());
+    let typed = inf.infer(expr).unwrap();
+    if let TypeKind::Con(gt) = &typed.ty.ty {
+        assert_eq!(*gt, variant_type);
+    } else {
+        panic!("expected variant type");
+    }
+}
+
+#[test]
+fn test_infer_constructor_with_payload() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let ctor_name = global_name(0);
+    let payload = annotation_var(GlobalType {
+        krate: None,
+        name: INT_TYPE,
+    });
+    let variant = make_variant(variant_type, vec![], vec![(ctor_name, Some(payload))]);
+    inf.register_variant(variant).unwrap();
+    let ctor = Resolved::new(ResolvedKind::Constructor(variant_type, ctor_name), span());
+    let app = resolved_app(ctor, resolved_int(42));
+    let typed = inf.infer(app).unwrap();
+    if let TypeKind::Con(gt) = &typed.ty.ty {
+        assert_eq!(*gt, variant_type);
+    } else {
+        panic!("expected variant type");
+    }
+}
+
+#[test]
+fn test_infer_parameterized_constructor() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let type_param = global_type(200);
+    let ctor_name = global_name(0);
+    let payload = annotation_var(type_param);
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(ctor_name, Some(payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let ctor = Resolved::new(ResolvedKind::Constructor(variant_type, ctor_name), span());
+    let app = resolved_app(ctor, resolved_int(42));
+    let typed = inf.infer(app).unwrap();
+    if let TypeKind::App(con, arg) = &typed.ty.ty {
+        if let TypeKind::Con(gt) = &con.ty {
+            assert_eq!(*gt, variant_type);
+        }
+        if let TypeKind::Con(gt) = &arg.ty {
+            assert_eq!(gt.name, INT_TYPE);
+        }
+    } else {
+        panic!("expected applied variant type");
+    }
+}
+
+#[test]
+fn test_register_recursive_variant() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let nil_ctor = global_name(0);
+    let cons_ctor = global_name(1);
+    let type_param = global_type(200);
+    let elem_annot = annotation_var(type_param);
+    let variant_self = annotation_var(variant_type);
+    let list_of_a = annotation_app(variant_self, elem_annot.clone());
+    let cons_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(Box::new(elem_annot), Box::new(list_of_a)),
+        span(),
+    );
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(nil_ctor, None), (cons_ctor, Some(cons_payload))],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+}
+
+#[test]
+fn test_recursive_variant_nil_constructor() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let nil_ctor = global_name(0);
+    let cons_ctor = global_name(1);
+    let type_param = global_type(200);
+    let elem_annot = annotation_var(type_param);
+    let variant_self = annotation_var(variant_type);
+    let list_of_a = annotation_app(variant_self, elem_annot.clone());
+    let cons_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(Box::new(elem_annot), Box::new(list_of_a)),
+        span(),
+    );
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(nil_ctor, None), (cons_ctor, Some(cons_payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let nil = Resolved::new(ResolvedKind::Constructor(variant_type, nil_ctor), span());
+    let typed = inf.infer(nil).unwrap();
+    assert!(matches!(typed.ty.ty, TypeKind::App(_, _)));
+}
+
+#[test]
+fn test_recursive_variant_cons_constructor() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let nil_ctor = global_name(0);
+    let cons_ctor = global_name(1);
+    let type_param = global_type(200);
+    let elem_annot = annotation_var(type_param);
+    let variant_self = annotation_var(variant_type);
+    let list_of_a = annotation_app(variant_self, elem_annot.clone());
+    let cons_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(Box::new(elem_annot), Box::new(list_of_a)),
+        span(),
+    );
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(nil_ctor, None), (cons_ctor, Some(cons_payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let nil = Resolved::new(ResolvedKind::Constructor(variant_type, nil_ctor), span());
+    let cons = Resolved::new(ResolvedKind::Constructor(variant_type, cons_ctor), span());
+    let pair = resolved_pair(resolved_int(1), nil);
+    let applied = resolved_app(cons, pair);
+    let typed = inf.infer(applied).unwrap();
+    if let TypeKind::App(con, elem) = &typed.ty.ty {
+        if let TypeKind::Con(gt) = &con.ty {
+            assert_eq!(*gt, variant_type);
+        }
+        if let TypeKind::Con(gt) = &elem.ty {
+            assert_eq!(gt.name, INT_TYPE);
+        }
+    } else {
+        panic!("expected MyList[int]");
+    }
+}
+
+#[test]
+fn test_recursive_variant_nested() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let nil_ctor = global_name(0);
+    let cons_ctor = global_name(1);
+    let type_param = global_type(200);
+    let elem_annot = annotation_var(type_param);
+    let variant_self = annotation_var(variant_type);
+    let list_of_a = annotation_app(variant_self, elem_annot.clone());
+    let cons_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(Box::new(elem_annot), Box::new(list_of_a)),
+        span(),
+    );
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(nil_ctor, None), (cons_ctor, Some(cons_payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let nil = Resolved::new(ResolvedKind::Constructor(variant_type, nil_ctor), span());
+    let cons = Resolved::new(ResolvedKind::Constructor(variant_type, cons_ctor), span());
+    let inner = resolved_app(cons.clone(), resolved_pair(resolved_int(2), nil));
+    let outer = resolved_app(cons, resolved_pair(resolved_int(1), inner));
+    let typed = inf.infer(outer).unwrap();
+    if let TypeKind::App(con, elem) = &typed.ty.ty {
+        if let TypeKind::Con(gt) = &con.ty {
+            assert_eq!(*gt, variant_type);
+        }
+        if let TypeKind::Con(gt) = &elem.ty {
+            assert_eq!(gt.name, INT_TYPE);
+        }
+    } else {
+        panic!("expected MyList[int]");
+    }
+}
+
+#[test]
+fn test_binary_tree_variant() {
+    let mut inf = Inferrer::new();
+    let tree_type = global_type(100);
+    let leaf_ctor = global_name(0);
+    let node_ctor = global_name(1);
+    let type_param = global_type(200);
+    let elem_annot = annotation_var(type_param);
+    let tree_self = annotation_var(tree_type);
+    let tree_of_a = annotation_app(tree_self.clone(), elem_annot.clone());
+    let node_payload = ResolvedAnnotation::new(
+        ResolvedAnnotationKind::Pair(
+            Box::new(tree_of_a.clone()),
+            Box::new(ResolvedAnnotation::new(
+                ResolvedAnnotationKind::Pair(Box::new(elem_annot), Box::new(tree_of_a)),
+                span(),
+            )),
+        ),
+        span(),
+    );
+    let variant = make_variant(
+        tree_type,
+        vec![type_param],
+        vec![(leaf_ctor, None), (node_ctor, Some(node_payload))],
+    );
+    assert!(inf.register_variant(variant).is_ok());
+    let leaf = Resolved::new(ResolvedKind::Constructor(tree_type, leaf_ctor), span());
+    let typed = inf.infer(leaf).unwrap();
+    assert!(matches!(typed.ty.ty, TypeKind::App(_, _)));
+}
+
+#[test]
+fn test_either_variant() {
+    let mut inf = Inferrer::new();
+    let either_type = global_type(100);
+    let left_ctor = global_name(0);
+    let right_ctor = global_name(1);
+    let param_a = global_type(200);
+    let param_b = global_type(201);
+    let left_payload = annotation_var(param_a);
+    let right_payload = annotation_var(param_b);
+    let variant = make_variant(
+        either_type,
+        vec![param_a, param_b],
+        vec![
+            (left_ctor, Some(left_payload)),
+            (right_ctor, Some(right_payload)),
+        ],
+    );
+    inf.register_variant(variant).unwrap();
+    let left = Resolved::new(ResolvedKind::Constructor(either_type, left_ctor), span());
+    let applied = resolved_app(left, resolved_int(42));
+    let typed = inf.infer(applied).unwrap();
+    if let TypeKind::App(outer, _) = &typed.ty.ty {
+        if let TypeKind::App(con, arg) = &outer.ty {
+            if let TypeKind::Con(gt) = &con.ty {
+                assert_eq!(*gt, either_type);
+            }
+            if let TypeKind::Con(gt) = &arg.ty {
+                assert_eq!(gt.name, INT_TYPE);
+            }
+        }
+    } else {
+        panic!("expected Either[int, ?]");
+    }
+}
+
+#[test]
+fn test_option_variant() {
+    let mut inf = Inferrer::new();
+    let variant_type = global_type(100);
+    let none_ctor = global_name(0);
+    let some_ctor = global_name(1);
+    let type_param = global_type(200);
+    let payload = annotation_var(type_param);
+    let variant = make_variant(
+        variant_type,
+        vec![type_param],
+        vec![(none_ctor, None), (some_ctor, Some(payload))],
+    );
+    inf.register_variant(variant).unwrap();
+    let some_expr = Resolved::new(ResolvedKind::Constructor(variant_type, some_ctor), span());
+    let applied = resolved_app(some_expr, resolved_int(42));
+    let typed = inf.infer(applied).unwrap();
+    assert!(matches!(typed.ty.ty, TypeKind::App(_, _)));
+}
