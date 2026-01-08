@@ -1009,7 +1009,10 @@ fn test_substitutor_record() {
 
     let subst = Substitutor::new(&scheme, &args);
     let mut fields = BTreeMap::new();
-    fields.insert("a".to_string(), atom_var(global_name(1), vec![make_type_var(0)]));
+    fields.insert(
+        "a".to_string(),
+        atom_var(global_name(1), vec![make_type_var(0)]),
+    );
     fields.insert("b".to_string(), atom_int(5));
     let record = PrimExpr::Record(fields);
     let result = subst.subst_prim(record);
@@ -1054,10 +1057,8 @@ fn test_monomorphize_rec_record() {
 
 #[test]
 fn test_monomorphize_field_access() {
-    let field_access_expr = PrimExpr::FieldAccess(
-        atom_var(global_name(10), vec![]),
-        "name".to_string(),
-    );
+    let field_access_expr =
+        PrimExpr::FieldAccess(atom_var(global_name(10), vec![]), "name".to_string());
     let main = mono_val(global_name(20), make_string(), field_access_expr);
 
     let program = make_program(vec![main], Name(100), global_name(20));
@@ -1335,4 +1336,41 @@ fn test_accumulate_multiple_crates() {
     assert_eq!(program.main_name, main_name);
     // Should use the max name from crates with None krate
     assert_eq!(program.next_name, Name(20));
+}
+
+#[test]
+fn test_monomorphize_chain_specialization() {
+    // g<T>(y: T) = y
+    // f<A>(x: A) = g<A>(x)
+    // main = f<Int>(42)
+
+    // This tests if monomorphizing 'f' correctly triggers
+    // the registration and specialization of 'g'.
+
+    let g_scheme = make_scheme(vec![(0, Rc::new(Kind::Star))], make_type_var(0));
+    let g_poly = poly_val(
+        global_name(1),
+        g_scheme,
+        make_type_var(0),
+        expr_simple(atom_var(global_name(10), vec![]), make_type_var(0)),
+    );
+
+    let f_scheme = make_scheme(vec![(1, Rc::new(Kind::Star))], make_type_var(1));
+    let f_body = expr_simple(
+        atom_var(global_name(1), vec![make_type_var(1)]),
+        make_type_var(1),
+    );
+    let f_poly = poly_val(global_name(2), f_scheme, make_type_var(1), f_body);
+
+    let main = mono_val(
+        global_name(3),
+        make_int(),
+        prim_app(atom_var(global_name(2), vec![make_int()]), atom_int(42)),
+    );
+
+    let program = make_program(vec![g_poly, f_poly, main], Name(100), global_name(3));
+    let result = monomorphize(program);
+
+    // Should find specialized 'f_Int' AND specialized 'g_Int'
+    assert!(result.decls.len() >= 3);
 }

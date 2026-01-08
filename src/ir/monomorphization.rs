@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct Program {
-    decls: Vec<Decl>,
-    next_name: Name, // Now in the global namespace
-    main_name: GlobalName,
+    pub decls: Vec<Decl>,
+    pub next_name: Name, // Now in the global namespace
+    pub main_name: GlobalName,
 }
 
 pub fn accumulate(crates: Vec<Crate>, main_name: GlobalName) -> Program {

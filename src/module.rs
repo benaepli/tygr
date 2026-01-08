@@ -348,4 +348,18 @@ impl CrateCompiler {
     pub fn compile_to<S: crate::ir::stage::IrStage>(&self, typed: TypedCrate) -> S::Output {
         S::convert(typed, self.next_name())
     }
+
+    /// Compile all crates to a specific whole-program IR stage.
+    pub fn compile_program_to<S: crate::ir::stage::ProgramStage>(
+        &self,
+        crates: Vec<TypedCrate>,
+        main_name: GlobalName,
+    ) -> S::Output {
+        use crate::ir::stage::AnfStage;
+        let anf_crates: Vec<_> = crates
+            .into_iter()
+            .map(|c| self.compile_to::<AnfStage>(c))
+            .collect();
+        S::convert(anf_crates, main_name)
+    }
 }

@@ -9,11 +9,13 @@ use tygr::compiler::compile_script;
 use tygr::custom::CustomFnRegistry;
 use tygr::interpreter;
 use tygr::interpreter::{ValueDisplay, eval_groups, eval_statement, run_main};
-use tygr::ir::stage::{ConstructorStage, DecisionTreeStage, PatternStage};
+use tygr::ir::stage::{
+    AnfStage, ConstructorStage, DecisionTreeStage, MonomorphizedStage, PatternStage,
+};
 use tygr::manifest::{Manifest, ProjectType};
 use tygr::module::CrateCompiler;
 use tygr::repl::Repl;
-use tygr::visualize::{constructor, decision_tree, pattern, typed};
+use tygr::visualize::{anf, constructor, decision_tree, pattern, typed};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -55,6 +57,8 @@ enum Stage {
     Constructor,
     Pattern,
     DecisionTree,
+    Anf,
+    Monomorphized,
 }
 
 fn read_file(path: &PathBuf) -> String {
@@ -168,6 +172,21 @@ fn visualize_file(path: &PathBuf, stage: Stage) {
             let ir = compiler.compile_to::<DecisionTreeStage>(typed);
             decision_tree::visualize_crate(&ir, name_table)
         }
+        Stage::Anf => {
+            let ir = compiler.compile_to::<AnfStage>(typed);
+            anf::visualize_crate(&ir, name_table)
+        }
+        Stage::Monomorphized => {
+            let main_name = match find_and_verify_main(&typed.groups, name_table) {
+                Ok(name) => name,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            };
+            let ir = compiler.compile_program_to::<MonomorphizedStage>(vec![typed], main_name);
+            anf::visualize_program(&ir, name_table)
+        }
     };
 
     println!("{}", output);
@@ -198,6 +217,24 @@ fn visualize_project(stage: Stage) {
 
     let name_table = compiler.name_table();
 
+    // For monomorphized stage, we need all crates and the main function
+    if let Stage::Monomorphized = stage {
+        let root_crate = crates
+            .last()
+            .expect("at least one crate should be compiled");
+        let main_name = match find_and_verify_main(&root_crate.groups, name_table) {
+            Ok(name) => name,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        };
+        let ir = compiler.compile_program_to::<MonomorphizedStage>(crates, main_name);
+        let output = anf::visualize_program(&ir, name_table);
+        println!("{}", output);
+        return;
+    }
+
     // Visualize the root crate (the last one compiled)
     let typed = crates
         .into_iter()
@@ -218,6 +255,11 @@ fn visualize_project(stage: Stage) {
             let ir = compiler.compile_to::<DecisionTreeStage>(typed);
             decision_tree::visualize_crate(&ir, name_table)
         }
+        Stage::Anf => {
+            let ir = compiler.compile_to::<AnfStage>(typed);
+            anf::visualize_crate(&ir, name_table)
+        }
+        Stage::Monomorphized => unreachable!(), // Handled above
     };
     println!("{}", output);
 }

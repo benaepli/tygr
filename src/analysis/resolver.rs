@@ -520,6 +520,7 @@ impl Resolver {
 
     fn declare_def(
         &mut self,
+        ctx: &mut ResolveContext,
         resolved_crate: &mut CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         def: Definition,
@@ -530,7 +531,7 @@ impl Resolver {
                 def.span,
             ));
         }
-        let name_id = self.global_ctx.new_name(def.name.clone());
+        let name_id = ctx.new_name(def.name.clone());
         resolved_module.definitions.insert(
             def.name.clone(),
             (
@@ -547,6 +548,7 @@ impl Resolver {
 
     fn declare_type_alias(
         &mut self,
+        ctx: &mut ResolveContext,
         resolved_crate: &mut CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         alias: TypeAlias,
@@ -558,7 +560,7 @@ impl Resolver {
             ));
         }
 
-        let id = self.global_ctx.new_id(alias.name.clone());
+        let id = ctx.new_id(alias.name.clone());
 
         resolved_module.types.insert(
             alias.name.clone(),
@@ -577,6 +579,7 @@ impl Resolver {
 
     fn declare_variant(
         &mut self,
+        ctx: &mut ResolveContext,
         resolved_crate: &mut CrateDefMap,
         resolved_module: &mut ResolvedModuleData,
         variant: Variant,
@@ -588,7 +591,7 @@ impl Resolver {
             ));
         }
 
-        let id = self.global_ctx.new_id(variant.name.clone());
+        let id = ctx.new_id(variant.name.clone());
 
         resolved_module.types.insert(
             variant.name.clone(),
@@ -608,7 +611,7 @@ impl Resolver {
                     ctor.span,
                 ));
             }
-            let ctor_id = self.global_ctx.new_name(ctor_name.clone());
+            let ctor_id = ctx.new_name(ctor_name.clone());
             ctor_name_map.insert(ctor_name.clone(), ctor_id);
             resolved_module.definitions.insert(
                 ctor_name.clone(),
@@ -799,13 +802,9 @@ impl Resolver {
 
     fn resolve_bodies(
         &mut self,
+        ctx: &mut ResolveContext,
         resolved: &mut CrateDefMap,
-    ) -> Result<ResolveContext, ResolutionError> {
-        let mut ctx = ResolveContext {
-            crate_id: Some(resolved.crate_id),
-            ..Default::default()
-        };
-
+    ) -> Result<(), ResolutionError> {
         for (id, (alias, mod_id)) in resolved.aliases_to_resolve.drain() {
             ctx.module_id = Some(mod_id);
 
@@ -825,7 +824,7 @@ impl Resolver {
                 type_params.push(gid);
             }
 
-            let body = Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, alias.body)?;
+            let body = Self::resolve_annotation(ctx, &mut self.scope_ctx, alias.body)?;
             self.scope_ctx.type_scopes.pop();
 
             resolved.types.insert(
@@ -870,7 +869,7 @@ impl Resolver {
                 };
 
                 let annotation = if let Some(a) = ctor.annotation {
-                    Some(Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, a)?)
+                    Some(Self::resolve_annotation(ctx, &mut self.scope_ctx, a)?)
                 } else {
                     None
                 };
@@ -933,14 +932,14 @@ impl Resolver {
             }
 
             let annotation = if let Some(a) = def.annotation {
-                Some(Self::resolve_annotation(&mut ctx, &mut self.scope_ctx, a)?)
+                Some(Self::resolve_annotation(ctx, &mut self.scope_ctx, a)?)
             } else {
                 None
             };
 
             debug_assert_eq!(self.scope_ctx.scopes.len(), 1, "Scope stack leaked!");
 
-            let (expr, _free) = Self::analyze(&mut ctx, &mut self.scope_ctx, def.expr)?;
+            let (expr, _free) = Self::analyze(ctx, &mut self.scope_ctx, def.expr)?;
             self.scope_ctx.type_scopes.pop();
             resolved.definitions.insert(
                 id,
@@ -960,7 +959,7 @@ impl Resolver {
             );
         }
 
-        Ok(ctx)
+        Ok(())
     }
 
     pub fn resolve_crate(
@@ -969,6 +968,10 @@ impl Resolver {
         mut krate: Crate,
         extern_prelude: ExternPrelude,
     ) -> Result<ResolveContext, ResolutionError> {
+        let mut ctx = ResolveContext {
+            crate_id: Some(id),
+            ..Default::default()
+        };
         // We use two phases. First is declaration.
         let mut resolved = CrateDefMap {
             crate_id: id,
@@ -996,14 +999,20 @@ impl Resolver {
             for def in module.ast {
                 match def {
                     Declaration::Def(def) => {
-                        self.declare_def(&mut resolved, &mut resolved_module, def)?
+                        self.declare_def(&mut ctx, &mut resolved, &mut resolved_module, def)?
                     }
-                    Declaration::Variant(variant) => {
-                        self.declare_variant(&mut resolved, &mut resolved_module, variant)?
-                    }
-                    Declaration::TypeAlias(alias) => {
-                        self.declare_type_alias(&mut resolved, &mut resolved_module, alias)?
-                    }
+                    Declaration::Variant(variant) => self.declare_variant(
+                        &mut ctx,
+                        &mut resolved,
+                        &mut resolved_module,
+                        variant,
+                    )?,
+                    Declaration::TypeAlias(alias) => self.declare_type_alias(
+                        &mut ctx,
+                        &mut resolved,
+                        &mut resolved_module,
+                        alias,
+                    )?,
                     Declaration::Module(module_decl) => self.declare_module(
                         &mut resolved,
                         &mut resolved_module,
@@ -1034,7 +1043,7 @@ impl Resolver {
             .world
             .crates
             .insert(resolved.crate_id, resolved.clone());
-        let ctx = self.resolve_bodies(&mut resolved)?;
+        self.resolve_bodies(&mut ctx, &mut resolved)?;
 
         self.scope_ctx.world.crates.insert(id, resolved);
         Ok(ctx)
